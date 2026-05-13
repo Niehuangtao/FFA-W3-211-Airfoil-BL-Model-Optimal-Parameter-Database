@@ -1,0 +1,3314 @@
+软件全称    Beddoes–Leishman动态失速模型参数优化软件
+软件简称    BLPO
+软件版本    V1.0
+
+源 程 序
+
+上海交通大学
+
+(源 程 序 代 码 部 分)
+%% ===== File: BLPO_AppLauncher.m =====
+function BLPO_AppLauncher()
+%BLPO_APPLAUNCHER Start the BLPO visual software.
+root = fileparts(mfilename("fullpath"));
+addpath(fullfile(root, "functions"));
+if ~isfile(fullfile(root, "sample_data", "sample_reference_experiment_2col.csv"))
+    BLPO_make_sample_data();
+end
+BLPO_App(Visible="on");
+end
+%% ===== File: BLPO_App.m =====
+classdef BLPO_App < handle
+    %BLPO_APP Visual software for user-defined BL model optimization.
+    properties
+        Root
+        Figure
+        MeanEdit
+        AmpEdit
+        PhaseEdit
+        ReEdit
+        UEdit
+        KEdit
+        ChordEdit
+        CyclesEdit
+        StepsEdit
+        ReferenceEdit
+        PolarEdit
+        OutputEdit
+        ModeDropDown
+        PopEdit
+        GenEdit
+        LocalSearchCheck
+        ParallelCheck
+        StatusLabel
+        MetricsLabel
+        ProgressGauge
+        ProgressLabel
+        TimeAxes
+        PolarAxes
+        CmTimeAxes
+        CmPolarAxes
+        ParameterTable
+        LogArea
+        LastSetcase
+        LastResult
+    end
+    methods
+        function app = BLPO_App(options)
+            arguments
+                options.Visible (1,1) string = "on"
+            end
+            app.Root = fileparts(mfilename("fullpath"));
+            addpath(fullfile(app.Root, "functions"));
+            app.buildUI(options.Visible);
+            app.setDefaults();
+            app.appendLog("BLPO software ready. Import 2-column experiment data or 4-column CFD data, then preview or optimize.");
+        end
+        function delete(app)
+            if ~isempty(app.Figure) && isvalid(app.Figure)
+                delete(app.Figure);
+            end
+        end
+        function preview(app)
+            app.onPreview();
+        end
+        function optimize(app)
+            app.onOptimize();
+        end
+        function exportCurrent(app)
+            app.onExport();
+        end
+    end
+    methods (Access = private)
+        function buildUI(app, visible)
+            app.Figure = uifigure("Name", "BLPO Dynamic Stall Parameter Optimization", ...
+                "Position", [80 60 1480 820], "Visible", visible);
+            rootGrid = uigridlayout(app.Figure, [1 2]);
+            rootGrid.ColumnWidth = {360, "1x"};
+            rootGrid.RowHeight = {"1x"};
+            rootGrid.Padding = [12 12 12 12];
+            rootGrid.ColumnSpacing = 12;
+            leftPanel = uipanel(rootGrid, "Title", "Case setup");
+            leftPanel.Layout.Row = 1;
+            leftPanel.Layout.Column = 1;
+            leftGrid = uigridlayout(leftPanel, [27 2]);
+            leftGrid.ColumnWidth = {145, "1x"};
+            leftGrid.RowHeight = repmat({22}, 1, 27);
+            leftGrid.Padding = [10 6 10 6];
+            leftGrid.RowSpacing = 3;
+            sectionLabel = uilabel(leftGrid, "Text", "Motion condition", "FontWeight", "bold");
+            sectionLabel.Layout.Row = 1;
+            sectionLabel.Layout.Column = [1 2];
+            app.MeanEdit = app.addNumeric(leftGrid, 2, "Mean angle (deg)", 5);
+            app.AmpEdit = app.addNumeric(leftGrid, 3, "Amplitude (deg)", 10);
+            app.PhaseEdit = app.addNumeric(leftGrid, 4, "Phase (deg)", 0);
+            app.ReEdit = app.addNumeric(leftGrid, 5, "Reynolds number", 1e6);
+            app.UEdit = app.addNumeric(leftGrid, 6, "Velocity U (m/s)", 10);
+            app.KEdit = app.addNumeric(leftGrid, 7, "Reduced freq. k", 0.31);
+            app.ChordEdit = app.addNumeric(leftGrid, 8, "Chord c (m)", 1);
+            app.CyclesEdit = app.addNumeric(leftGrid, 9, "Cycles", 10);
+            app.StepsEdit = app.addNumeric(leftGrid, 10, "Steps per cycle", 500);
+            dataTitle = uilabel(leftGrid, "Text", "Reference and output", "FontWeight", "bold");
+            dataTitle.Layout.Row = 11;
+            dataTitle.Layout.Column = [1 2];
+            app.ReferenceEdit = app.addPathPicker(leftGrid, 12, "Reference file", @(~,~) app.onBrowseReference());
+            app.PolarEdit = app.addPathPicker(leftGrid, 13, "Airfoil polar", @(~,~) app.onBrowsePolar());
+            app.OutputEdit = app.addPathPicker(leftGrid, 14, "Output folder", @(~,~) app.onBrowseOutput());
+            optTitle = uilabel(leftGrid, "Text", "Optimization", "FontWeight", "bold");
+            optTitle.Layout.Row = 15;
+            optTitle.Layout.Column = [1 2];
+            modeLabel = uilabel(leftGrid, "Text", "Mode");
+            modeLabel.Layout.Row = 16;
+            modeLabel.Layout.Column = 1;
+            app.ModeDropDown = uidropdown(leftGrid, "Items", ["full","lag","cl","cm"], "Value", "full");
+            app.ModeDropDown.Layout.Row = 16;
+            app.ModeDropDown.Layout.Column = 2;
+            app.PopEdit = app.addNumeric(leftGrid, 17, "Population size", 24);
+            app.GenEdit = app.addNumeric(leftGrid, 18, "Max generations", 8);
+            app.LocalSearchCheck = uicheckbox(leftGrid, "Text", "Run local search after GA", "Value", true);
+            app.LocalSearchCheck.Layout.Row = 19;
+            app.LocalSearchCheck.Layout.Column = [1 2];
+            app.ParallelCheck = uicheckbox(leftGrid, "Text", "Use parallel pool when available", "Value", false);
+            app.ParallelCheck.Layout.Row = 20;
+            app.ParallelCheck.Layout.Column = [1 2];
+            previewButton = uibutton(leftGrid, "push", "Text", "Preview default model", ...
+                "ButtonPushedFcn", @(~,~) app.onPreview());
+            previewButton.Layout.Row = 21;
+            previewButton.Layout.Column = [1 2];
+            runButton = uibutton(leftGrid, "push", "Text", "Run optimization", ...
+                "ButtonPushedFcn", @(~,~) app.onOptimize());
+            runButton.Layout.Row = 22;
+            runButton.Layout.Column = [1 2];
+            exportButton = uibutton(leftGrid, "push", "Text", "Export last result", ...
+                "ButtonPushedFcn", @(~,~) app.onExport());
+            exportButton.Layout.Row = 23;
+            exportButton.Layout.Column = [1 2];
+            app.ProgressLabel = uilabel(leftGrid, "Text", "Progress: 0%");
+            app.ProgressLabel.Layout.Row = 24;
+            app.ProgressLabel.Layout.Column = [1 2];
+            app.ProgressGauge = uigauge(leftGrid, "linear", "Limits", [0 100], "Value", 0);
+            app.ProgressGauge.Layout.Row = 25;
+            app.ProgressGauge.Layout.Column = [1 2];
+            app.StatusLabel = uilabel(leftGrid, "Text", "Status: idle", "FontWeight", "bold");
+            app.StatusLabel.Layout.Row = 26;
+            app.StatusLabel.Layout.Column = [1 2];
+            app.MetricsLabel = uilabel(leftGrid, "Text", "Objective: -");
+            app.MetricsLabel.Layout.Row = 27;
+            app.MetricsLabel.Layout.Column = [1 2];
+            rightGrid = uigridlayout(rootGrid, [3 3]);
+            rightGrid.Layout.Row = 1;
+            rightGrid.Layout.Column = 2;
+            rightGrid.RowHeight = {"1x", "1x", 130};
+            rightGrid.ColumnWidth = {"1x", "1x", 300};
+            rightGrid.Padding = [0 0 0 0];
+            rightGrid.RowSpacing = 10;
+            rightGrid.ColumnSpacing = 10;
+            app.TimeAxes = uiaxes(rightGrid);
+            app.TimeAxes.Layout.Row = 1;
+            app.TimeAxes.Layout.Column = 1;
+            title(app.TimeAxes, "Time-history comparison");
+            xlabel(app.TimeAxes, "Time (s)");
+            ylabel(app.TimeAxes, "C_L");
+            grid(app.TimeAxes, "on");
+            app.PolarAxes = uiaxes(rightGrid);
+            app.PolarAxes.Layout.Row = 1;
+            app.PolarAxes.Layout.Column = 2;
+            title(app.PolarAxes, "Lift loop");
+            xlabel(app.PolarAxes, "Angle of attack (deg)");
+            ylabel(app.PolarAxes, "C_L");
+            grid(app.PolarAxes, "on");
+            app.CmTimeAxes = uiaxes(rightGrid);
+            app.CmTimeAxes.Layout.Row = 2;
+            app.CmTimeAxes.Layout.Column = 1;
+            title(app.CmTimeAxes, "Moment time history");
+            xlabel(app.CmTimeAxes, "Time (s)");
+            ylabel(app.CmTimeAxes, "C_M");
+            grid(app.CmTimeAxes, "on");
+            app.CmPolarAxes = uiaxes(rightGrid);
+            app.CmPolarAxes.Layout.Row = 2;
+            app.CmPolarAxes.Layout.Column = 2;
+            title(app.CmPolarAxes, "Moment loop");
+            xlabel(app.CmPolarAxes, "Angle of attack (deg)");
+            ylabel(app.CmPolarAxes, "C_M");
+            grid(app.CmPolarAxes, "on");
+            app.ParameterTable = uitable(rightGrid);
+            app.ParameterTable.Layout.Row = [1 2];
+            app.ParameterTable.Layout.Column = 3;
+            app.ParameterTable.ColumnName = {"Parameter", "Value"};
+            app.LogArea = uitextarea(rightGrid, "Editable", "off");
+            app.LogArea.Layout.Row = 3;
+            app.LogArea.Layout.Column = [1 3];
+        end
+        function edit = addNumeric(~, grid, row, label, defaultValue)
+            lab = uilabel(grid, "Text", label);
+            lab.Layout.Row = row;
+            lab.Layout.Column = 1;
+            edit = uieditfield(grid, "numeric", "Value", defaultValue);
+            edit.Layout.Row = row;
+            edit.Layout.Column = 2;
+        end
+        function edit = addPathPicker(~, grid, row, label, callback)
+            lab = uilabel(grid, "Text", label);
+            lab.Layout.Row = row;
+            lab.Layout.Column = 1;
+            sub = uigridlayout(grid, [1 2]);
+            sub.Layout.Row = row;
+            sub.Layout.Column = 2;
+            sub.ColumnWidth = {"1x", 34};
+            sub.Padding = [0 0 0 0];
+            sub.ColumnSpacing = 4;
+            edit = uieditfield(sub, "text");
+            edit.Layout.Row = 1;
+            edit.Layout.Column = 1;
+            btn = uibutton(sub, "push", "Text", "...", "ButtonPushedFcn", callback);
+            btn.Layout.Row = 1;
+            btn.Layout.Column = 2;
+        end
+        function setDefaults(app)
+            cfg = BLPO_sample_config();
+            app.MeanEdit.Value = cfg.meanAngleDeg;
+            app.AmpEdit.Value = cfg.amplitudeDeg;
+            app.PhaseEdit.Value = cfg.phaseDeg;
+            app.ReEdit.Value = cfg.Re;
+            app.UEdit.Value = cfg.U;
+            app.KEdit.Value = cfg.reducedFrequency;
+            app.ChordEdit.Value = cfg.chord;
+            app.CyclesEdit.Value = cfg.cycles;
+            app.StepsEdit.Value = cfg.stepsPerCycle;
+            app.ReferenceEdit.Value = fullfile(app.Root, "sample_data", "sample_reference_experiment_2col.csv");
+            app.PolarEdit.Value = cfg.polarFile;
+            app.OutputEdit.Value = fullfile(app.Root, "output");
+            defaults = BLPO_default_parameters();
+            app.ParameterTable.Data = [defaults.labels(:), num2cell(defaults.vector(:))];
+        end
+        function cfg = getConfig(app)
+            cfg = BLPO_sample_config();
+            cfg.meanAngleDeg = app.MeanEdit.Value;
+            cfg.amplitudeDeg = app.AmpEdit.Value;
+            cfg.phaseDeg = app.PhaseEdit.Value;
+            cfg.Re = app.ReEdit.Value;
+            cfg.U = app.UEdit.Value;
+            cfg.reducedFrequency = app.KEdit.Value;
+            cfg.chord = app.ChordEdit.Value;
+            cfg.cycles = app.CyclesEdit.Value;
+            cfg.stepsPerCycle = app.StepsEdit.Value;
+            cfg.polarFile = app.PolarEdit.Value;
+        end
+        function setStatus(app, text)
+            app.StatusLabel.Text = "Status: " + string(text);
+            drawnow;
+        end
+        function setProgress(app, fraction, text)
+            fraction = max(0, min(1, double(fraction)));
+            percent = round(100 * fraction);
+            app.ProgressGauge.Value = percent;
+            app.ProgressLabel.Text = sprintf("Progress: %d%% - %s", percent, char(text));
+            drawnow limitrate;
+        end
+        function appendLog(app, message)
+            stamp = string(datetime("now", "Format", "HH:mm:ss"));
+            line = stamp + "  " + string(message);
+            app.LogArea.Value = [app.LogArea.Value; line];
+            drawnow;
+        end
+        function setResult(app, result)
+            app.LastResult = result;
+            defaults = BLPO_default_parameters();
+            if isfield(result, "initial")
+                app.ParameterTable.ColumnName = {"Parameter", "Initial", "Optimized"};
+                app.ParameterTable.Data = [defaults.labels(:), num2cell(result.initial.param(:)), num2cell(result.param(:))];
+            else
+                app.ParameterTable.ColumnName = {"Parameter", "Value"};
+                app.ParameterTable.Data = [defaults.labels(:), num2cell(result.param(:))];
+            end
+            app.MetricsLabel.Text = sprintf("Area objective: %.5g | Cl %.5g | Cm %.5g", ...
+                result.metrics.total, result.metrics.areaCl, result.metrics.areaCm);
+            app.plotResult(result);
+        end
+        function plotResult(app, result)
+            timeMask = app.timeDisplayMask(result);
+            modelTimeMask = app.modelTimeDisplayMask(result);
+            loopMask = app.loopDisplayMask(result);
+            modelLoopMask = app.modelLoopDisplayMask(result);
+            hasInitial = isfield(result, "initial");
+            cla(app.TimeAxes);
+            plot(app.TimeAxes, result.reference.time(timeMask), result.reference.cl(timeMask), "k-", "LineWidth", 1.4);
+            hold(app.TimeAxes, "on");
+            if hasInitial
+                plot(app.TimeAxes, result.fit.time(timeMask), result.initial.fit.cl(timeMask), "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.2);
+            end
+            plot(app.TimeAxes, result.fit.time(timeMask), result.fit.cl(timeMask), "r--", "LineWidth", 1.3);
+            if hasInitial
+                legend(app.TimeAxes, "Ref Cl", "Init Cl", "Opt Cl", "Location", "best");
+            else
+                legend(app.TimeAxes, "Ref Cl", "BL Cl", "Location", "best");
+            end
+            title(app.TimeAxes, "Time-history comparison (last 3 cycles)");
+            grid(app.TimeAxes, "on");
+            cla(app.PolarAxes);
+            [refAlpha, refCl] = app.closedLoop(result.reference.alphaDeg(loopMask), result.reference.cl(loopMask));
+            plot(app.PolarAxes, refAlpha, refCl, "k-", "LineWidth", 1.4);
+            hold(app.PolarAxes, "on");
+            if hasInitial
+                [initAlpha, initCl] = app.closedLoop(result.initial.model.alphaDeg(modelLoopMask), result.initial.model.cl(modelLoopMask));
+                plot(app.PolarAxes, initAlpha, initCl, "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.2);
+            end
+            [optAlpha, optCl] = app.closedLoop(result.model.alphaDeg(modelLoopMask), result.model.cl(modelLoopMask));
+            plot(app.PolarAxes, optAlpha, optCl, "r--", "LineWidth", 1.3);
+            if hasInitial
+                legend(app.PolarAxes, "Reference", "Initial", "Optimized", "Location", "best");
+            else
+                legend(app.PolarAxes, "Reference", "BL model", "Location", "best");
+            end
+            title(app.PolarAxes, "Lift loop (last cycle)");
+            grid(app.PolarAxes, "on");
+            cla(app.CmTimeAxes);
+            if ~isempty(result.reference.cm)
+                plot(app.CmTimeAxes, result.reference.time(timeMask), result.reference.cm(timeMask), "k-", "LineWidth", 1.4);
+                hold(app.CmTimeAxes, "on");
+                if hasInitial
+                    plot(app.CmTimeAxes, result.fit.time(timeMask), result.initial.fit.cm(timeMask), "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.2);
+                end
+                plot(app.CmTimeAxes, result.fit.time(timeMask), result.fit.cm(timeMask), "r--", "LineWidth", 1.3);
+                if hasInitial
+                    legend(app.CmTimeAxes, "Ref Cm", "Init Cm", "Opt Cm", "Location", "best");
+                else
+                    legend(app.CmTimeAxes, "Ref Cm", "BL Cm", "Location", "best");
+                end
+            else
+                if hasInitial
+                    plot(app.CmTimeAxes, result.initial.model.time(modelTimeMask), result.initial.model.cm(modelTimeMask), "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.2);
+                    hold(app.CmTimeAxes, "on");
+                end
+                plot(app.CmTimeAxes, result.model.time(modelTimeMask), result.model.cm(modelTimeMask), "r--", "LineWidth", 1.3);
+                if hasInitial
+                    legend(app.CmTimeAxes, "Initial", "Optimized", "Location", "best");
+                else
+                    legend(app.CmTimeAxes, "BL model", "Location", "best");
+                end
+            end
+            title(app.CmTimeAxes, "Moment time history (last 3 cycles)");
+            grid(app.CmTimeAxes, "on");
+            cla(app.CmPolarAxes);
+            if ~isempty(result.reference.cm)
+                [refAlphaCm, refCm] = app.closedLoop(result.reference.alphaDeg(loopMask), result.reference.cm(loopMask));
+                plot(app.CmPolarAxes, refAlphaCm, refCm, "k-", "LineWidth", 1.4);
+                hold(app.CmPolarAxes, "on");
+            end
+            if hasInitial
+                [initAlphaCm, initCm] = app.closedLoop(result.initial.model.alphaDeg(modelLoopMask), result.initial.model.cm(modelLoopMask));
+                plot(app.CmPolarAxes, initAlphaCm, initCm, "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.2);
+                hold(app.CmPolarAxes, "on");
+            end
+            [optAlphaCm, optCm] = app.closedLoop(result.model.alphaDeg(modelLoopMask), result.model.cm(modelLoopMask));
+            plot(app.CmPolarAxes, optAlphaCm, optCm, "r--", "LineWidth", 1.3);
+            if ~isempty(result.reference.cm)
+                if hasInitial
+                    legend(app.CmPolarAxes, "Reference", "Initial", "Optimized", "Location", "best");
+                else
+                    legend(app.CmPolarAxes, "Reference", "BL model", "Location", "best");
+                end
+            elseif hasInitial
+                legend(app.CmPolarAxes, "Initial", "Optimized", "Location", "best");
+            else
+                legend(app.CmPolarAxes, "BL model", "Location", "best");
+            end
+            title(app.CmPolarAxes, "Moment loop (last cycle)");
+            grid(app.CmPolarAxes, "on");
+        end
+        function mask = timeDisplayMask(~, result)
+            if isfield(result, "display") && isfield(result.display, "historyMask")
+                mask = result.display.historyMask;
+            elseif isfield(result, "display") && isfield(result.display, "lastCycleMask")
+                mask = result.display.lastCycleMask;
+            else
+                mask = true(size(result.reference.time));
+            end
+            if nnz(mask) < 3
+                mask = true(size(result.reference.time));
+            end
+        end
+        function mask = modelTimeDisplayMask(~, result)
+            if isfield(result, "display") && isfield(result.display, "modelHistoryMask")
+                mask = result.display.modelHistoryMask;
+            elseif isfield(result, "display") && isfield(result.display, "modelLastCycleMask")
+                mask = result.display.modelLastCycleMask;
+            else
+                mask = true(size(result.model.time));
+            end
+            if nnz(mask) < 3
+                mask = true(size(result.model.time));
+            end
+        end
+        function mask = loopDisplayMask(~, result)
+            if isfield(result, "display") && isfield(result.display, "lastCycleMask")
+                mask = result.display.lastCycleMask;
+            else
+                mask = true(size(result.reference.time));
+            end
+            if nnz(mask) < 3
+                mask = true(size(result.reference.time));
+            end
+        end
+        function mask = modelLoopDisplayMask(~, result)
+            if isfield(result, "display") && isfield(result.display, "modelLastCycleMask")
+                mask = result.display.modelLastCycleMask;
+            else
+                mask = true(size(result.model.time));
+            end
+            if nnz(mask) < 3
+                mask = true(size(result.model.time));
+            end
+        end
+        function [x, y] = closedLoop(~, x, y)
+            x = x(:);
+            y = y(:);
+            if numel(x) >= 2 && (x(end) ~= x(1) || y(end) ~= y(1))
+                x(end + 1) = x(1);
+                y(end + 1) = y(1);
+            end
+        end
+        function onBrowseReference(app)
+            [file, path] = uigetfile({"*.csv;*.txt;*.dat;*.out", "Data files"; "*.*", "All files"}, "Select reference data");
+            if isequal(file, 0)
+                return;
+            end
+            app.ReferenceEdit.Value = fullfile(path, file);
+        end
+        function onBrowsePolar(app)
+            [file, path] = uigetfile({"*.csv;*.txt;*.dat;*.out", "Polar files"; "*.*", "All files"}, "Select airfoil polar file");
+            if isequal(file, 0)
+                return;
+            end
+            app.PolarEdit.Value = fullfile(path, file);
+        end
+        function onBrowseOutput(app)
+            path = uigetdir(app.OutputEdit.Value, "Select output folder");
+            if isequal(path, 0)
+                return;
+            end
+            app.OutputEdit.Value = path;
+        end
+        function onPreview(app)
+            try
+                app.setProgress(0, "starting preview");
+                app.setStatus("building case");
+                app.appendLog("Reading reference data and previewing baseline parameters.");
+                app.setProgress(0.20, "reading inputs");
+                cfg = app.getConfig();
+                app.LastSetcase = BLPO_build_setcase(cfg, string(app.ReferenceEdit.Value));
+                app.setProgress(0.50, "evaluating default model");
+                params = BLPO_default_parameters();
+                result = BLPO_evaluate(params.vector, app.LastSetcase);
+                app.setProgress(0.80, "plotting result");
+                app.setResult(result);
+                app.setStatus("preview complete");
+                app.setProgress(1.00, "preview complete");
+                app.appendLog("Preview complete. Reference type: " + app.LastSetcase.reference.kind + ...
+                    ", rows: " + string(app.LastSetcase.reference.nRows) + ".");
+            catch ME
+                app.setStatus("error");
+                app.setProgress(0, "error");
+                app.appendLog("Error: " + ME.message);
+                uialert(app.Figure, ME.message, "BLPO preview error");
+            end
+        end
+        function onOptimize(app)
+            try
+                app.setProgress(0, "starting optimization");
+                app.setStatus("optimizing");
+                app.appendLog("Optimization started. This may take several minutes for larger populations.");
+                app.setProgress(0.03, "reading inputs");
+                cfg = app.getConfig();
+                app.LastSetcase = BLPO_build_setcase(cfg, string(app.ReferenceEdit.Value));
+                app.setProgress(0.06, "building optimizer");
+                [~, result, history] = BLPO_optimize(app.LastSetcase, ...
+                    Mode=string(app.ModeDropDown.Value), ...
+                    PopulationSize=app.PopEdit.Value, ...
+                    MaxGenerations=app.GenEdit.Value, ...
+                    UseParallel=app.ParallelCheck.Value, ...
+                    RunLocalSearch=app.LocalSearchCheck.Value, ...
+                    Display="iter", ...
+                    ProgressFcn=@(fraction, message) app.setProgress(fraction, message));
+                app.setProgress(0.97, "plotting and exporting");
+                app.setResult(result);
+                files = BLPO_export_results(result, string(app.OutputEdit.Value));
+                app.setStatus("optimization complete");
+                app.setProgress(1.00, "optimization complete");
+                app.appendLog(sprintf("Optimization complete. Initial %.5g, final %.5g.", ...
+                    history.initialFitness, result.metrics.total));
+                app.appendLog("Results exported to " + string(app.OutputEdit.Value));
+                app.appendLog("Figure: " + string(files.figure));
+            catch ME
+                app.setStatus("error");
+                app.setProgress(0, "error");
+                app.appendLog("Error: " + ME.message);
+                uialert(app.Figure, ME.message, "BLPO optimization error");
+            end
+        end
+        function onExport(app)
+            try
+                if isempty(app.LastResult)
+                    app.onPreview();
+                end
+                files = BLPO_export_results(app.LastResult, string(app.OutputEdit.Value));
+                app.setStatus("export complete");
+                app.setProgress(1.00, "export complete");
+                app.appendLog("Last result exported to " + string(app.OutputEdit.Value));
+                app.appendLog("Metrics: " + string(files.metrics));
+            catch ME
+                app.setStatus("error");
+                app.appendLog("Error: " + ME.message);
+                uialert(app.Figure, ME.message, "BLPO export error");
+            end
+        end
+    end
+end
+%% ===== File: BLPO_sample_config.m =====
+function cfg = BLPO_sample_config()
+%BLPO_SAMPLE_CONFIG Default UI/CLI configuration.
+root = fileparts(mfilename("fullpath"));
+cfg.meanAngleDeg = 5;
+cfg.amplitudeDeg = 10;
+cfg.phaseDeg = 0;
+cfg.Re = 1e6;
+cfg.rho = 1.225;
+cfg.mu = 1.8e-5;
+cfg.chord = 1;
+cfg.soundSpeed = 340.3;
+cfg.U = 10;
+cfg.reducedFrequency = 0.31;
+cfg.frequencyHz = NaN;
+cfg.useFrequencyHz = false;
+cfg.cycles = 10;
+cfg.stepsPerCycle = 500;
+cfg.polarFile = fullfile(root, "sample_data", "FFA_W3_211.txt");
+cfg.CD0 = 1.5;
+cfg.CM0 = 0.01;
+cfg.alpha1Deg = 12;
+cfg.alpha2Deg = -10;
+cfg.CN1 = 1.7;
+cfg.CN2 = -1;
+cfg.slope = 7;
+cfg.xAC = 0.25;
+cfg.xcpC = 0.2;
+end
+%% ===== File: BLPO_make_sample_data.m =====
+function BLPO_make_sample_data()
+%BLPO_MAKE_SAMPLE_DATA Generate 2-column and 4-column reference examples.
+root = fileparts(mfilename("fullpath"));
+addpath(fullfile(root, "functions"));
+cfg = BLPO_sample_config();
+conditions = BLPO_build_condition( ...
+    MeanAngleDeg=cfg.meanAngleDeg, ...
+    AmplitudeDeg=cfg.amplitudeDeg, ...
+    PhaseDeg=cfg.phaseDeg, ...
+    Re=cfg.Re, ...
+    Rho=cfg.rho, ...
+    Mu=cfg.mu, ...
+    Chord=cfg.chord, ...
+    SoundSpeed=cfg.soundSpeed, ...
+    U=cfg.U, ...
+    ReducedFrequency=cfg.reducedFrequency, ...
+    FrequencyHz=cfg.frequencyHz, ...
+    UseFrequencyHz=cfg.useFrequencyHz, ...
+    Cycles=cfg.cycles, ...
+    StepsPerCycle=cfg.stepsPerCycle);
+airfoil = BLPO_default_airfoil( ...
+    PolarFile=string(cfg.polarFile), Chord=cfg.chord, CD0=cfg.CD0, CM0=cfg.CM0, ...
+    Alpha1Deg=cfg.alpha1Deg, Alpha2Deg=cfg.alpha2Deg, CN1=cfg.CN1, CN2=cfg.CN2, ...
+    Slope=cfg.slope, XAC=cfg.xAC, XCPC=cfg.xcpC);
+params = BLPO_default_parameters();
+[~, ~, ~, cd, cl, cm] = cal_DS(params.vector, conditions, airfoil);
+time = conditions.t(:);
+cl = cl(:);
+cd = cd(:);
+cm = cm(:);
+sampleDir = fullfile(root, "sample_data");
+if ~isfolder(sampleDir)
+    mkdir(sampleDir);
+end
+idx = (1:4:numel(time))';
+noise1 = sin(2 * pi * time(idx) / max(time));
+noise2 = cos(2 * pi * time(idx) / max(time));
+noise3 = sin(4 * pi * time(idx) / max(time));
+experimentData = [time(idx), cl(idx) + 0.015 * noise1];
+cfdData = [time(idx), ...
+           cl(idx) + 0.010 * noise1, ...
+           cd(idx) + 0.003 * noise2, ...
+           cm(idx) + 0.002 * noise3];
+writematrix(experimentData, fullfile(sampleDir, "sample_reference_experiment_2col.csv"));
+writematrix(cfdData, fullfile(sampleDir, "sample_reference_cfd_4col.csv"));
+disp("Sample data written to " + string(sampleDir));
+end
+%% ===== File: BLPO_selftest.m =====
+function BLPO_selftest()
+%BLPO_SELFTEST Verify sample data, evaluation, short optimization and export.
+root = fileparts(mfilename("fullpath"));
+addpath(fullfile(root, "functions"));
+BLPO_make_sample_data();
+cfg = BLPO_sample_config();
+params = BLPO_default_parameters();
+expFile = string(fullfile(root, "sample_data", "sample_reference_experiment_2col.csv"));
+cfdFile = string(fullfile(root, "sample_data", "sample_reference_cfd_4col.csv"));
+setcaseExp = BLPO_build_setcase(cfg, expFile);
+resultExp = BLPO_evaluate(params.vector, setcaseExp);
+fprintf("Experiment objective: %.6g\n", resultExp.metrics.total);
+setcaseCfd = BLPO_build_setcase(cfg, cfdFile);
+resultCfd = BLPO_evaluate(params.vector, setcaseCfd);
+fprintf("CFD objective: %.6g\n", resultCfd.metrics.total);
+[~, resultOpt, history] = BLPO_optimize(setcaseExp, ...
+    Mode="lag", PopulationSize=8, MaxGenerations=1, RunLocalSearch=false, Display="off");
+fprintf("Short optimization objective: %.6g -> %.6g\n", history.initialFitness, resultOpt.metrics.total);
+files = BLPO_export_results(resultCfd, string(fullfile(root, "output", "selftest")));
+disp(files);
+disp("BLPO selftest completed.");
+end
+%% ===== File: run_BLPO_cli.m =====
+function run_BLPO_cli()
+%RUN_BLPO_CLI Command-line workflow for user-defined BLPO cases.
+root = fileparts(mfilename("fullpath"));
+addpath(fullfile(root, "functions"));
+fprintf("\nBLPO dynamic-stall parameter optimization\n");
+fprintf("Reference data format: 2 columns [time, Cl] or 4 columns [time, Cl, Cd, Cm].\n\n");
+cfg = BLPO_sample_config();
+cfg.meanAngleDeg = local_prompt_number("Mean angle alpha0 (deg)", cfg.meanAngleDeg);
+cfg.amplitudeDeg = local_prompt_number("Pitch amplitude A (deg)", cfg.amplitudeDeg);
+cfg.reducedFrequency = local_prompt_number("Reduced frequency k", cfg.reducedFrequency);
+cfg.U = local_prompt_number("Incoming velocity U (m/s)", cfg.U);
+cfg.Re = local_prompt_number("Reynolds number Re", cfg.Re);
+cfg.cycles = local_prompt_number("Number of simulated cycles", cfg.cycles);
+cfg.stepsPerCycle = local_prompt_number("Steps per cycle", cfg.stepsPerCycle);
+defaultRef = fullfile(root, "sample_data", "sample_reference_experiment_2col.csv");
+referenceFile = input("Reference data file [" + string(defaultRef) + "]: ", "s");
+if strlength(strtrim(referenceFile)) == 0
+    referenceFile = defaultRef;
+end
+mode = string(input("Optimization mode full/lag/cl/cm [full]: ", "s"));
+if strlength(strtrim(mode)) == 0
+    mode = "full";
+end
+popSize = local_prompt_number("GA population size", 24);
+maxGen = local_prompt_number("GA max generations", 8);
+outputFolder = input("Output folder [" + string(fullfile(root, "output")) + "]: ", "s");
+if strlength(strtrim(outputFolder)) == 0
+    outputFolder = fullfile(root, "output");
+end
+setcase = BLPO_build_setcase(cfg, string(referenceFile));
+[bestParam, result, history] = BLPO_optimize(setcase, ...
+    Mode=mode, PopulationSize=popSize, MaxGenerations=maxGen, RunLocalSearch=true);
+files = BLPO_export_results(result, string(outputFolder));
+fprintf("\nInitial area objective: %.6g\n", history.initialFitness);
+fprintf("Final area objective:   %.6g\n", result.metrics.total);
+fprintf("Area Cl/Cm:             %.6g / %.6g\n", result.metrics.areaCl, result.metrics.areaCm);
+fprintf("RMSE Cl/Cd/Cm:          %.6g / %.6g / %.6g\n", result.metrics.rmseCl, result.metrics.rmseCd, result.metrics.rmseCm);
+fprintf("Results saved to:  %s\n", outputFolder);
+disp(files);
+disp(bestParam);
+end
+function value = local_prompt_number(label, defaultValue)
+answer = input(label + " [" + string(defaultValue) + "]: ", "s");
+if strlength(strtrim(answer)) == 0
+    value = defaultValue;
+else
+    value = str2double(answer);
+    if ~isfinite(value)
+        error("Invalid numeric input for %s.", label);
+    end
+end
+end
+%% ===== File: package_BLPO_app.m =====
+function package_BLPO_app()
+%PACKAGE_BLPO_APP Build a deployable BLPO application with MATLAB Compiler.
+root = fileparts(mfilename("fullpath"));
+addpath(fullfile(root, "functions"));
+if ~isfolder(fullfile(root, "dist"))
+    mkdir(fullfile(root, "dist"));
+end
+if isempty(which("mcc"))
+    error("MATLAB Compiler is required to package the application.");
+end
+old = pwd;
+cleanup = onCleanup(@() cd(old));
+cd(root);
+mcc("-m", "BLPO_AppLauncher.m", ...
+    "-a", fullfile(root, "functions"), ...
+    "-a", fullfile(root, "sample_data"), ...
+    "-d", fullfile(root, "dist"), ...
+    "-o", "BLPO");
+disp("Packaged files written to " + string(fullfile(root, "dist")));
+end
+%% ===== File: functions/absolute_maxi.m =====
+function maxi = absolute_maxi(x1,x2)
+    X = [x1,x2];
+    maxi = zeros(1,length(x1));
+    for i = 1 : length(x1)
+        [~, idx] = max(X(i,:));
+        maxi(i) = X(i,idx);
+    end
+end
+%% ===== File: functions/absolute_mini.m =====
+function mini = absolute_mini(x1,x2)
+    X = [x1
+        x2];
+    mini = zeros(1,length(x1));
+    for i = 1 : length(x1)
+        [~, idx] = min(X(i,:));
+        mini(i) = X(i,idx);
+    end
+end
+%% ===== File: functions/area_cover.m =====
+function [exp_up,exp_dw] = area_cover(ARE_data,DTW_data,MSE_data,init_data,exp_data)
+    [ARE_up,ARE_dw] = reshape_data(ARE_data);
+    [MSE_up,MSE_dw] = reshape_data(MSE_data);
+    [DTW_up,DTW_dw] = reshape_data(DTW_data);
+    [init_up,init_dw] = reshape_data(init_data);
+    [exp_up,exp_dw] = reshape_expdata(exp_data);
+    % max_dw_ARE = absolute_maxi(ARE_dw(:,2),exp_dw(:,2));
+    % max_dw_MSE = absolute_maxi(MSE_dw(:,2),exp_dw(:,2));
+    % max_dw_DTW = absolute_maxi(DTW_dw(:,2),exp_dw(:,2));
+    % max_dw_init = absolute_maxi(init_dw(:,2),exp_dw(:,2));
+    %
+    % min_up_ARE = absolute_mini(ARE_up(:,2),exp_up(:,2));
+    % min_up_MSE = absolute_mini(MSE_up(:,2),exp_up(:,2));
+    % min_up_DTW = absolute_mini(DTW_up(:,2),exp_up(:,2));
+    % min_up_init = absolute_mini(init_up(:,2),exp_up(:,2));
+    %
+    % S_exp = trapz(exp_up(:,1),exp_up(:,2)) - trapz(exp_dw(:,1),exp_dw(:,2));
+    % S_ARE = (trapz(min_up_ARE,ARE_up(:,1)) - trapz(max_dw_ARE,ARE_dw(:,1)))/S_exp;
+    % S_MSE = (trapz(min_up_MSE,MSE_up(:,1)) - trapz(max_dw_MSE,MSE_dw(:,1)))/S_exp;
+    % S_DTW = (trapz(min_up_DTW,DTW_up(:,1)) - trapz(max_dw_DTW,DTW_dw(:,1)))/S_exp;
+    % S_init = (trapz(min_up_init,init_up(:,1)) - trapz(max_dw_init,init_dw(:,1)))/S_exp;
+    %
+    % E = [S_ARE S_MSE S_DTW S_init];
+    % figure
+    % plot(ARE_up(:,1),ARE_up(:,2))
+    % hold on
+    % plot(ARE_dw(:,1),ARE_dw(:,2))
+    %
+    % plot(exp_up(:,1),exp_up(:,2))
+    % plot(exp_dw(:,1),exp_dw(:,2))
+    % plot(ARE_dw(:,1),max_dw_ARE,'o')
+    % plot(ARE_up(:,1),min_up_ARE,'*')
+end
+%% ===== File: functions/area_overlap.m =====
+function [overlap_area,RMSE] = area_overlap(x,x1,y1_data,x2,y2_data)
+    y1 = interp1(x1,y1_data,x,'spline','extrap');
+    y2 = interp1(x2,y2_data,x,'spline','extrap');
+    RMSE = sqrt(mean(y2-y1).^2);
+    y_min = min(y1,y2);
+    overlap_area = trapz(x,y_min);
+end
+%% ===== File: functions/area_overlap_GZ.m =====
+function ARE = area_overlap_GZ(BL_a,BL_data,exp_a,exp_data)
+    pg_BL = polyshape(BL_a,BL_data);
+    pg_exp = polyshape(exp_a,exp_data);
+    %计算交集
+    pg_inter = intersect(pg_BL, pg_exp);
+    area_inter = area(pg_inter);
+    %计算并集
+    pg_union = union(pg_BL, pg_exp);
+    area_union = area(pg_union);
+    % 非重叠面积
+    area_nonoverlap = area_union - area_inter;
+    ARE = area_nonoverlap;
+end
+%% ===== File: functions/BLPO_build_condition.m =====
+function conditions = BLPO_build_condition(cfg)
+%BLPO_BUILD_CONDITION Create a user-defined pitching-motion condition.
+arguments
+    cfg.MeanAngleDeg (1,1) double = 5
+    cfg.AmplitudeDeg (1,1) double = 10
+    cfg.PhaseDeg (1,1) double = 0
+    cfg.Re (1,1) double = 1e6
+    cfg.Rho (1,1) double = 1.225
+    cfg.Mu (1,1) double = 1.8e-5
+    cfg.Chord (1,1) double = 1
+    cfg.SoundSpeed (1,1) double = 340.3
+    cfg.U (1,1) double = 10
+    cfg.ReducedFrequency (1,1) double = 0.31
+    cfg.FrequencyHz (1,1) double = NaN
+    cfg.UseFrequencyHz (1,1) logical = false
+    cfg.Cycles (1,1) double = 10
+    cfg.StepsPerCycle (1,1) double = 500
+end
+U = cfg.U;
+if ~isfinite(U) || U <= 0
+    U = cfg.Re * cfg.Mu / (cfg.Rho * cfg.Chord);
+end
+if cfg.UseFrequencyHz && isfinite(cfg.FrequencyHz) && cfg.FrequencyHz > 0
+    w = 2 * pi * cfg.FrequencyHz;
+    ff = cfg.FrequencyHz;
+    k = pi * ff * cfg.Chord / U;
+else
+    k = cfg.ReducedFrequency;
+    w = 2 * k * U / cfg.Chord;
+    ff = w / (2 * pi);
+end
+nCycles = max(1, round(cfg.Cycles));
+stepsPerCycle = max(50, round(cfg.StepsPerCycle));
+n_steps = nCycles * stepsPerCycle + 1;
+period = 2 * pi / w;
+t = linspace(0, period * nCycles, n_steps);
+s = 2 * U * t / cfg.Chord;
+ds = s(2) - s(1);
+dt = t(2) - t(1);
+phase = deg2rad(cfg.PhaseDeg);
+aDeg = cfg.MeanAngleDeg - cfg.AmplitudeDeg * sin(w * t + phase);
+daDeg = -cfg.AmplitudeDeg * w * cos(w * t + phase);
+qDeg = daDeg * cfg.Chord / U;
+dqDeg = cfg.AmplitudeDeg * w^2 * cfg.Chord / U * sin(w * t + phase);
+M = U / cfg.SoundSpeed;
+beta = sqrt(max(0, 1 - M^2));
+conditions.a = deg2rad(aDeg);
+conditions.da = deg2rad(daDeg);
+conditions.q = deg2rad(qDeg);
+conditions.dq = deg2rad(dqDeg);
+conditions.as = cfg.SoundSpeed;
+conditions.beta = beta;
+conditions.n_steps = n_steps;
+conditions.ds = ds;
+conditions.dt = dt;
+conditions.U = U;
+conditions.M = M;
+conditions.s = s;
+conditions.t = t;
+conditions.w = w;
+conditions.ff = ff;
+conditions.k = k;
+conditions.Re = cfg.Re;
+conditions.meanAngleDeg = cfg.MeanAngleDeg;
+conditions.amplitudeDeg = cfg.AmplitudeDeg;
+conditions.phaseDeg = cfg.PhaseDeg;
+conditions.cycles = nCycles;
+conditions.stepsPerCycle = stepsPerCycle;
+end
+%% ===== File: functions/BLPO_build_setcase.m =====
+function setcase = BLPO_build_setcase(cfg, referenceFile)
+%BLPO_BUILD_SETCASE Assemble model condition, airfoil constants and reference data.
+arguments
+    cfg struct
+    referenceFile (1,1) string
+end
+conditions = BLPO_build_condition( ...
+    MeanAngleDeg=cfg.meanAngleDeg, ...
+    AmplitudeDeg=cfg.amplitudeDeg, ...
+    PhaseDeg=cfg.phaseDeg, ...
+    Re=cfg.Re, ...
+    Rho=cfg.rho, ...
+    Mu=cfg.mu, ...
+    Chord=cfg.chord, ...
+    SoundSpeed=cfg.soundSpeed, ...
+    U=cfg.U, ...
+    ReducedFrequency=cfg.reducedFrequency, ...
+    FrequencyHz=cfg.frequencyHz, ...
+    UseFrequencyHz=cfg.useFrequencyHz, ...
+    Cycles=cfg.cycles, ...
+    StepsPerCycle=cfg.stepsPerCycle);
+airfoildata = BLPO_default_airfoil( ...
+    PolarFile=string(cfg.polarFile), ...
+    Chord=cfg.chord, ...
+    CD0=cfg.CD0, ...
+    CM0=cfg.CM0, ...
+    Alpha1Deg=cfg.alpha1Deg, ...
+    Alpha2Deg=cfg.alpha2Deg, ...
+    CN1=cfg.CN1, ...
+    CN2=cfg.CN2, ...
+    Slope=cfg.slope, ...
+    XAC=cfg.xAC, ...
+    XCPC=cfg.xcpC);
+reference = BLPO_read_reference(referenceFile);
+setcase.meanangle = cfg.meanAngleDeg;
+setcase.averageangle = cfg.amplitudeDeg;
+setcase.conditions = conditions;
+setcase.airfoldata = airfoildata;
+setcase.CFDdatapath = char(referenceFile);
+setcase.reference = reference;
+end
+%% ===== File: functions/BLPO_default_airfoil.m =====
+function airfoildata = BLPO_default_airfoil(options)
+%BLPO_DEFAULT_AIRFOIL Build airfoil constants used by cal_DS.
+arguments
+    options.PolarFile (1,1) string = ""
+    options.Chord (1,1) double = 1
+    options.CD0 (1,1) double = 1.5
+    options.CM0 (1,1) double = 0.01
+    options.Alpha1Deg (1,1) double = 15
+    options.Alpha2Deg (1,1) double = -12
+    options.CN1 (1,1) double = 1.65
+    options.CN2 (1,1) double = -1
+    options.Slope (1,1) double = 6.8
+    options.XAC (1,1) double = 0.25
+    options.XCPC (1,1) double = 0.2
+end
+if strlength(options.PolarFile) > 0 && isfile(options.PolarFile)
+    polar = readmatrix(options.PolarFile);
+    polar = polar(all(~isnan(polar), 2), :);
+    alpha0 = find_a0(polar);
+else
+    alpha0 = 0;
+end
+airfoildata.CD0 = options.CD0;
+airfoildata.CM0 = options.CM0;
+airfoildata.alpha0 = alpha0;
+airfoildata.alpha1 = deg2rad(options.Alpha1Deg);
+airfoildata.alpha2 = deg2rad(options.Alpha2Deg);
+airfoildata.CN1 = options.CN1;
+airfoildata.CN2 = options.CN2;
+airfoildata.slope = options.Slope;
+airfoildata.mCN = options.Slope;
+airfoildata.slope_M = options.Slope;
+airfoildata.c = options.Chord;
+airfoildata.xAC = options.XAC;
+airfoildata.xcp_c = options.XCPC;
+end
+%% ===== File: functions/BLPO_default_parameters.m =====
+function params = BLPO_default_parameters()
+%BLPO_DEFAULT_PARAMETERS Return baseline BL model parameters and bounds.
+params.lagLabels = {'S1','S2','S3','S4'};
+params.clLabels = {'A1','b1','A2','b2','Tp','Tf0','Tvl','Tv0','yita'};
+params.cmLabels = {'A3','b3','A4','b4','A5','b5','k0','k1','k2','k3','xcp'};
+params.labels = [params.lagLabels, params.clLabels, params.cmLabels];
+params.lag = [2 5 2 5];
+params.cl = [0.3 0.3 0.3 0.3 5 1 8 2 0.95];
+params.cm = [0.2 0.1 0.1 0.1 0.1 0.3 0.02 0.02 0.02 0.02 0.2];
+params.vector = [params.lag, params.cl, params.cm];
+params.lbLag = [0 0 0 0];
+params.ubLag = [40 40 40 40];
+params.lbCl = [0 0 0 0 0 0 0 0 0.80];
+params.ubCl = [0.8 0.8 0.8 0.8 10 5 15 5 0.95];
+params.lbCm = [0 0 0 0 0 0 0 0 0 0 0];
+params.ubCm = [0.5 0.5 0.5 0.5 0.5 0.5 1 1 1 1 0.5];
+params.lb = [params.lbLag, params.lbCl, params.lbCm];
+params.ub = [params.ubLag, params.ubCl, params.ubCm];
+end
+%% ===== File: functions/BLPO_evaluate.m =====
+function result = BLPO_evaluate(param, setcase)
+%BLPO_EVALUATE Run the BL model and compare it with user reference data.
+param = double(param(:))';
+if numel(param) ~= 24
+    error("BLPO:ParameterSize", "BL parameter vector must contain 24 values.");
+end
+conditions = setcase.conditions;
+airfoildata = setcase.airfoldata;
+reference = setcase.reference;
+[~, CN, ~, CD, CL, CM, alphaRad] = cal_DS(param, conditions, airfoildata);
+model.time = conditions.t(:);
+model.alphaDeg = rad2deg(alphaRad(:));
+model.cl = CL(:);
+model.cd = CD(:);
+model.cm = CM(:);
+model.cn = CN(:);
+validTime = reference.time >= model.time(1) & reference.time <= model.time(end);
+if nnz(validTime) < 3
+    error("BLPO:ReferenceTimeRange", "Reference time range does not overlap the simulated condition.");
+end
+time = reference.time(validTime);
+refCl = reference.cl(validTime);
+fitCl = interp1(model.time, model.cl, time, "linear");
+fitAlpha = interp1(model.time, model.alphaDeg, time, "linear");
+metrics.rmseCl = local_rmse(fitCl, refCl);
+metrics.rmseCd = NaN;
+metrics.rmseCm = NaN;
+if reference.hasCd
+    refCd = reference.cd(validTime);
+    fitCd = interp1(model.time, model.cd, time, "linear");
+    metrics.rmseCd = local_rmse(fitCd, refCd);
+else
+    refCd = [];
+    fitCd = [];
+end
+if reference.hasCm
+    refCm = reference.cm(validTime);
+    fitCm = interp1(model.time, model.cm, time, "linear");
+    metrics.rmseCm = local_rmse(fitCm, refCm);
+else
+    refCm = [];
+    fitCm = [];
+end
+result.param = param;
+result.model = model;
+result.fit.time = time;
+result.fit.alphaDeg = fitAlpha;
+result.fit.cl = fitCl;
+result.fit.cd = fitCd;
+result.fit.cm = fitCm;
+result.reference.time = time;
+result.reference.alphaDeg = fitAlpha;
+result.reference.cl = refCl;
+result.reference.cd = refCd;
+result.reference.cm = refCm;
+result.referenceInfo = reference;
+period = 2 * pi / conditions.w;
+displayEnd = time(end);
+historyStart = max(time(1), displayEnd - 3 * period);
+historyMask = time >= historyStart & time <= displayEnd;
+if nnz(historyMask) < 3
+    historyMask = true(size(time));
+    historyStart = time(1);
+end
+modelHistoryMask = model.time >= historyStart & model.time <= displayEnd;
+if nnz(modelHistoryMask) < 3
+    modelHistoryMask = true(size(model.time));
+end
+lastCycleEnd = displayEnd;
+lastCycleStart = max(time(1), displayEnd - period);
+lastCycleMask = time >= lastCycleStart & time <= lastCycleEnd;
+if nnz(lastCycleMask) < 3
+    lastCycleMask = true(size(time));
+    lastCycleStart = time(1);
+    lastCycleEnd = time(end);
+end
+modelLastCycleMask = model.time >= lastCycleStart & model.time <= lastCycleEnd;
+if nnz(modelLastCycleMask) < 3
+    modelLastCycleMask = true(size(model.time));
+end
+result.display.lastCycleStart = lastCycleStart;
+result.display.lastCycleEnd = lastCycleEnd;
+result.display.lastCycleMask = lastCycleMask;
+result.display.modelLastCycleMask = modelLastCycleMask;
+result.display.historyStart = historyStart;
+result.display.historyEnd = displayEnd;
+result.display.historyMask = historyMask;
+result.display.modelHistoryMask = modelHistoryMask;
+metrics.areaCl = local_nonoverlap_area(model.alphaDeg(modelLastCycleMask), model.cl(modelLastCycleMask), ...
+    result.reference.alphaDeg(lastCycleMask), result.reference.cl(lastCycleMask));
+if ~isempty(result.reference.cm)
+    metrics.areaCm = local_nonoverlap_area(model.alphaDeg(modelLastCycleMask), model.cm(modelLastCycleMask), ...
+        result.reference.alphaDeg(lastCycleMask), result.reference.cm(lastCycleMask));
+else
+    metrics.areaCm = NaN;
+end
+metrics.areaTotal = metrics.areaCl;
+if isfinite(metrics.areaCm)
+    metrics.areaTotal = metrics.areaTotal + metrics.areaCm;
+end
+metrics.total = metrics.areaTotal;
+result.metrics = metrics;
+end
+function value = local_rmse(a, b)
+value = sqrt(mean((a(:) - b(:)).^2, "omitnan"));
+if ~isfinite(value)
+    value = realmax("double") / 10;
+end
+end
+function value = local_nonoverlap_area(alphaModel, coeffModel, alphaRef, coeffRef)
+alphaModel = alphaModel(:);
+coeffModel = coeffModel(:);
+alphaRef = alphaRef(:);
+coeffRef = coeffRef(:);
+modelValid = isfinite(alphaModel) & isfinite(coeffModel);
+refValid = isfinite(alphaRef) & isfinite(coeffRef);
+alphaModel = alphaModel(modelValid);
+coeffModel = coeffModel(modelValid);
+alphaRef = alphaRef(refValid);
+coeffRef = coeffRef(refValid);
+if numel(alphaModel) < 3 || numel(alphaRef) < 3
+    value = realmax("double") / 10;
+    return;
+end
+warningState = warning("off", "MATLAB:polyshape:repairedBySimplify");
+cleanup = onCleanup(@() warning(warningState));
+try
+    modelShape = polyshape(alphaModel, coeffModel, "Simplify", true);
+    refShape = polyshape(alphaRef, coeffRef, "Simplify", true);
+    overlapShape = intersect(modelShape, refShape);
+    unionShape = union(modelShape, refShape);
+    value = area(unionShape) - area(overlapShape);
+catch
+    value = realmax("double") / 10;
+end
+if ~isfinite(value)
+    value = realmax("double") / 10;
+end
+end
+%% ===== File: functions/BLPO_export_results.m =====
+function files = BLPO_export_results(result, outputFolder)
+%BLPO_EXPORT_RESULTS Save parameters, metrics, comparison tables and figures.
+arguments
+    result struct
+    outputFolder (1,1) string
+end
+if ~isfolder(outputFolder)
+    mkdir(outputFolder);
+end
+defaults = BLPO_default_parameters();
+if isfield(result, "initial")
+    paramTable = table(defaults.labels(:), result.initial.param(:), result.param(:), ...
+        'VariableNames', {'Parameter','InitialValue','OptimizedValue'});
+else
+    paramTable = table(defaults.labels(:), result.param(:), ...
+        'VariableNames', {'Parameter','OptimizedValue'});
+end
+metricNames = ["Area_Cl"; "Area_Cm"; "Area_Objective"; "RMSE_Cl"; "RMSE_Cd"; "RMSE_Cm"];
+metricValues = [result.metrics.areaCl; result.metrics.areaCm; result.metrics.total; ...
+    result.metrics.rmseCl; result.metrics.rmseCd; result.metrics.rmseCm];
+metricTable = table(metricNames, metricValues, 'VariableNames', {'Metric','Value'});
+if isempty(result.reference.cd)
+    if isfield(result, "initial")
+        compareTable = table(result.reference.time, result.reference.alphaDeg, result.reference.cl, result.initial.fit.cl, result.fit.cl, ...
+            'VariableNames', {'Time','AlphaDeg','ReferenceCl','InitialCl','ModelCl'});
+    else
+        compareTable = table(result.reference.time, result.reference.alphaDeg, result.reference.cl, result.fit.cl, ...
+            'VariableNames', {'Time','AlphaDeg','ReferenceCl','ModelCl'});
+    end
+else
+    if isfield(result, "initial")
+        compareTable = table(result.reference.time, result.reference.alphaDeg, ...
+            result.reference.cl, result.initial.fit.cl, result.fit.cl, ...
+            result.reference.cd, result.initial.fit.cd, result.fit.cd, ...
+            result.reference.cm, result.initial.fit.cm, result.fit.cm, ...
+            'VariableNames', {'Time','AlphaDeg','ReferenceCl','InitialCl','ModelCl','ReferenceCd','InitialCd','ModelCd','ReferenceCm','InitialCm','ModelCm'});
+    else
+        compareTable = table(result.reference.time, result.reference.alphaDeg, ...
+            result.reference.cl, result.fit.cl, result.reference.cd, result.fit.cd, result.reference.cm, result.fit.cm, ...
+            'VariableNames', {'Time','AlphaDeg','ReferenceCl','ModelCl','ReferenceCd','ModelCd','ReferenceCm','ModelCm'});
+    end
+end
+files.parameters = fullfile(outputFolder, "optimized_parameters.csv");
+files.metrics = fullfile(outputFolder, "fit_metrics.csv");
+files.comparison = fullfile(outputFolder, "comparison_data.csv");
+files.mat = fullfile(outputFolder, "BLPO_result.mat");
+files.figure = fullfile(outputFolder, "fit_comparison.png");
+writetable(paramTable, files.parameters);
+writetable(metricTable, files.metrics);
+writetable(compareTable, files.comparison);
+save(files.mat, "result");
+BLPO_save_comparison_figure(result, files.figure);
+end
+%% ===== File: functions/BLPO_objective.m =====
+function value = BLPO_objective(param, setcase, options)
+%BLPO_OBJECTIVE Scalar objective for GA/fmincon.
+arguments
+    param
+    setcase struct
+    options.Target (1,1) string {mustBeMember(options.Target, ["total","cl","cm"])} = "total"
+end
+try
+    result = BLPO_evaluate(param, setcase);
+    switch options.Target
+        case "cl"
+            value = result.metrics.areaCl;
+        case "cm"
+            value = result.metrics.areaCm;
+        otherwise
+            value = result.metrics.total;
+    end
+catch
+    value = realmax("double") / 10;
+end
+if ~isfinite(value)
+    value = realmax("double") / 10;
+end
+end
+%% ===== File: functions/BLPO_optimize.m =====
+function [bestParam, result, history] = BLPO_optimize(setcase, options)
+%BLPO_OPTIMIZE Optimize BL parameters against user reference data.
+arguments
+    setcase struct
+    options.Mode (1,1) string {mustBeMember(options.Mode, ["full","lag","cl","cm"])} = "full"
+    options.PopulationSize (1,1) double = 48
+    options.MaxGenerations (1,1) double = 20
+    options.UseParallel (1,1) logical = false
+    options.RunLocalSearch (1,1) logical = true
+    options.Display (1,1) string = "iter"
+    options.ProgressFcn = []
+end
+defaults = BLPO_default_parameters();
+baseParam = defaults.vector;
+progressFcn = options.ProgressFcn;
+maxGenerations = max(1, round(options.MaxGenerations));
+populationSize = max(8, round(options.PopulationSize));
+if options.Mode == "full"
+    stages = ["lag", "cl", "cm"];
+else
+    stages = options.Mode;
+end
+history = struct("initialFitness", BLPO_objective(baseParam, setcase), ...
+                 "gaFitness", NaN, "localFitness", NaN, ...
+                 "finalFitness", NaN, "mode", options.Mode, ...
+                 "stages", []);
+currentParam = baseParam;
+local_notify(progressFcn, 0.05, "Initializing optimizer");
+for stageIndex = 1:numel(stages)
+    stageName = stages(stageIndex);
+    [idx, lb, ub] = local_mode_bounds(defaults, stageName);
+    [currentParam, stageHistory] = local_run_stage(currentParam, idx, lb, ub, ...
+        setcase, stageName, stageIndex, numel(stages), populationSize, ...
+        maxGenerations, options, progressFcn);
+    history.stages = [history.stages; stageHistory]; %#ok<AGROW>
+end
+if ~isempty(history.stages)
+    history.gaFitness = history.stages(end).gaFitness;
+    history.localFitness = history.stages(end).localFitness;
+    history.finalFitness = BLPO_objective(currentParam, setcase);
+end
+bestParam = currentParam;
+local_notify(progressFcn, 0.96, "Evaluating optimized parameters");
+result = BLPO_evaluate(bestParam, setcase);
+initialResult = BLPO_evaluate(baseParam, setcase);
+result.initial.param = baseParam;
+result.initial.model = initialResult.model;
+result.initial.fit = initialResult.fit;
+result.initial.metrics = initialResult.metrics;
+result.history = history;
+local_notify(progressFcn, 1.00, "Optimization complete");
+end
+function [param, stageHistory] = local_run_stage(startParam, idx, lb, ub, setcase, ...
+    stageName, stageIndex, stageCount, populationSize, maxGenerations, options, progressFcn)
+stageStart = 0.08 + 0.84 * (stageIndex - 1) / stageCount;
+stageSpan = 0.84 / stageCount;
+target = local_stage_target(stageName);
+if target == "cm" && ~setcase.reference.hasCm
+    stageHistory = local_skipped_stage(startParam, setcase, stageName);
+    param = startParam;
+    local_notify(progressFcn, stageStart + stageSpan, sprintf("Stage %d/%d skipped: %s reference data missing", stageIndex, stageCount, stageName));
+    return;
+end
+fitness = @(x) BLPO_objective(local_merge(startParam, idx, x), setcase, Target=target);
+local_notify(progressFcn, stageStart, sprintf("Stage %d/%d: optimizing %s area", stageIndex, stageCount, target));
+gaOptions = optimoptions("ga", ...
+    "PopulationSize", populationSize, ...
+    "MaxGenerations", maxGenerations, ...
+    "FunctionTolerance", 1e-5, ...
+    "ConstraintTolerance", 1e-5, ...
+    "Display", char(options.Display), ...
+    "UseParallel", options.UseParallel);
+initialPopulation = local_initial_population(startParam(idx), lb, ub);
+if ~isempty(initialPopulation)
+    gaOptions.InitialPopulationMatrix = initialPopulation;
+end
+if ~isempty(progressFcn)
+    gaOptions.OutputFcn = @(gaOptions, state, flag) local_ga_progress(progressFcn, ...
+        maxGenerations, stageName, stageIndex, stageCount, stageStart, stageSpan, gaOptions, state, flag);
+end
+[xBest, fBest] = ga(fitness, numel(idx), [], [], [], [], lb, ub, [], gaOptions);
+gaFitness = fBest;
+local_notify(progressFcn, stageStart + 0.78 * stageSpan, sprintf("%s GA complete", stageName));
+localFitness = NaN;
+initialFitness = BLPO_objective(startParam, setcase, Target=target);
+if options.RunLocalSearch
+    localOptions = optimoptions("fmincon", ...
+        "Algorithm", "sqp", ...
+        "Display", char(options.Display), ...
+        "MaxFunctionEvaluations", 200, ...
+        "OptimalityTolerance", 1e-5, ...
+        "StepTolerance", 1e-6);
+    if ~isempty(progressFcn)
+        localOptions.OutputFcn = @(x, optimValues, state) local_fmincon_progress(progressFcn, ...
+            stageName, stageIndex, stageCount, stageStart, stageSpan, optimValues, state);
+    end
+    local_notify(progressFcn, stageStart + 0.82 * stageSpan, sprintf("%s local search", stageName));
+    [xBest, fBest] = fmincon(fitness, xBest, [], [], [], [], lb, ub, [], localOptions);
+    localFitness = fBest;
+end
+candidateParam = local_merge(startParam, idx, xBest);
+candidateFitness = BLPO_objective(candidateParam, setcase, Target=target);
+accepted = candidateFitness <= initialFitness;
+if accepted
+    param = candidateParam;
+    finalFitness = candidateFitness;
+else
+    param = startParam;
+    finalFitness = initialFitness;
+end
+local_notify(progressFcn, stageStart + stageSpan, sprintf("Stage %d/%d complete: %s", stageIndex, stageCount, stageName));
+stageHistory = struct("name", stageName, ...
+    "target", target, ...
+    "skipped", false, ...
+    "accepted", accepted, ...
+    "initialFitness", initialFitness, ...
+    "gaFitness", gaFitness, ...
+    "localFitness", localFitness, ...
+    "finalFitness", finalFitness);
+end
+function target = local_stage_target(stageName)
+if stageName == "cm"
+    target = "cm";
+else
+    target = "cl";
+end
+end
+function stageHistory = local_skipped_stage(param, setcase, stageName)
+stageHistory = struct("name", stageName, ...
+    "target", "cm", ...
+    "skipped", true, ...
+    "accepted", false, ...
+    "initialFitness", BLPO_objective(param, setcase), ...
+    "gaFitness", NaN, ...
+    "localFitness", NaN, ...
+    "finalFitness", BLPO_objective(param, setcase));
+end
+function initialPopulation = local_initial_population(x0, lb, ub)
+x0 = double(x0(:))';
+lb = double(lb(:))';
+ub = double(ub(:))';
+if all(isfinite(x0)) && all(x0 >= lb) && all(x0 <= ub)
+    initialPopulation = x0;
+else
+    initialPopulation = [];
+end
+end
+function [idx, lb, ub] = local_mode_bounds(defaults, mode)
+switch mode
+    case "lag"
+        idx = 1:4;
+        lb = defaults.lbLag;
+        ub = defaults.ubLag;
+    case "cl"
+        idx = 5:13;
+        lb = defaults.lbCl;
+        ub = defaults.ubCl;
+    case "cm"
+        idx = 14:24;
+        lb = defaults.lbCm;
+        ub = defaults.ubCm;
+    otherwise
+        error("BLPO:UnsupportedMode", "Unsupported optimization mode: %s", mode);
+end
+end
+function merged = local_merge(baseParam, idx, x)
+merged = baseParam;
+merged(idx) = x;
+end
+function [state, gaOptions, optchanged] = local_ga_progress(progressFcn, maxGenerations, ...
+    stageName, stageIndex, stageCount, stageStart, stageSpan, gaOptions, state, flag)
+optchanged = false;
+generation = 0;
+if isfield(state, "Generation")
+    generation = state.Generation;
+end
+fraction = stageStart + 0.75 * stageSpan * min(1, generation / maxGenerations);
+switch string(flag)
+    case "init"
+        local_notify(progressFcn, stageStart, sprintf("Stage %d/%d %s GA initialized", stageIndex, stageCount, stageName));
+    case "iter"
+        local_notify(progressFcn, fraction, sprintf("Stage %d/%d %s GA generation %d / %d", ...
+            stageIndex, stageCount, stageName, generation, maxGenerations));
+    case "done"
+        local_notify(progressFcn, stageStart + 0.78 * stageSpan, sprintf("Stage %d/%d %s GA finished", ...
+            stageIndex, stageCount, stageName));
+end
+end
+function stop = local_fmincon_progress(progressFcn, stageName, stageIndex, stageCount, ...
+    stageStart, stageSpan, optimValues, state)
+stop = false;
+iteration = 0;
+if isfield(optimValues, "iteration")
+    iteration = optimValues.iteration;
+end
+fraction = stageStart + stageSpan * (0.82 + 0.13 * min(1, iteration / 20));
+switch string(state)
+    case "init"
+        local_notify(progressFcn, stageStart + 0.82 * stageSpan, sprintf("Stage %d/%d %s local search initialized", ...
+            stageIndex, stageCount, stageName));
+    case "iter"
+        local_notify(progressFcn, fraction, sprintf("Stage %d/%d %s local search iteration %d", ...
+            stageIndex, stageCount, stageName, iteration));
+    case "done"
+        local_notify(progressFcn, stageStart + 0.95 * stageSpan, sprintf("Stage %d/%d %s local search finished", ...
+            stageIndex, stageCount, stageName));
+end
+end
+function local_notify(progressFcn, fraction, message)
+if isempty(progressFcn)
+    return;
+end
+try
+    progressFcn(max(0, min(1, fraction)), string(message));
+catch
+end
+end
+%% ===== File: functions/BLPO_read_reference.m =====
+function reference = BLPO_read_reference(filename)
+%BLPO_READ_REFERENCE Read 2-column experiment or 4-column CFD reference data.
+arguments
+    filename (1,1) string
+end
+if ~isfile(filename)
+    error("BLPO:ReferenceNotFound", "Reference file does not exist: %s", filename);
+end
+data = readmatrix(filename);
+data = data(any(~isnan(data), 2), :);
+data = data(:, any(~isnan(data), 1));
+if size(data, 2) < 2
+    error("BLPO:ReferenceFormat", "Reference data must have 2 columns (time, Cl) or 4 columns (time, Cl, Cd, Cm).");
+end
+if size(data, 2) >= 4
+    data = data(:, 1:4);
+    valid = all(isfinite(data), 2);
+    data = data(valid, :);
+    reference.kind = "CFD";
+    reference.cd = data(:, 3);
+    reference.cm = data(:, 4);
+else
+    data = data(:, 1:2);
+    valid = all(isfinite(data), 2);
+    data = data(valid, :);
+    reference.kind = "Experiment";
+    reference.cd = [];
+    reference.cm = [];
+end
+if size(data, 1) < 3
+    error("BLPO:ReferenceTooShort", "Reference data must contain at least 3 numeric rows.");
+end
+[time, order] = sort(data(:, 1));
+data = data(order, :);
+[time, uniqueIdx] = unique(time, "stable");
+data = data(uniqueIdx, :);
+reference.file = filename;
+reference.time = time;
+reference.cl = data(:, 2);
+reference.hasCd = size(data, 2) >= 4;
+reference.hasCm = size(data, 2) >= 4;
+reference.nRows = numel(time);
+reference.nCols = size(data, 2);
+end
+%% ===== File: functions/BLPO_save_comparison_figure.m =====
+function BLPO_save_comparison_figure(result, filename)
+%BLPO_SAVE_COMPARISON_FIGURE Save model/reference comparison plots.
+arguments
+    result struct
+    filename (1,1) string
+end
+timeMask = local_time_mask(result);
+modelTimeMask = local_model_time_mask(result);
+loopMask = local_loop_mask(result);
+modelLoopMask = local_model_loop_mask(result);
+hasInitial = isfield(result, "initial");
+fig = figure("Visible", "off", "Color", "w", "Position", [100 100 1200 760]);
+tiledlayout(fig, 2, 2, "TileSpacing", "compact", "Padding", "compact");
+nexttile;
+plot(result.reference.time(timeMask), result.reference.cl(timeMask), "k-", "LineWidth", 1.5);
+hold on;
+if hasInitial
+    plot(result.fit.time(timeMask), result.initial.fit.cl(timeMask), "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.3);
+end
+plot(result.fit.time(timeMask), result.fit.cl(timeMask), "r--", "LineWidth", 1.4);
+grid on;
+xlabel("Time (s)");
+ylabel("C_L");
+title(sprintf("Lift coefficient, last 3 cycles, area = %.5g", result.metrics.areaCl));
+local_legend(hasInitial, true);
+nexttile;
+[refAlpha, refCl] = local_closed_loop(result.reference.alphaDeg(loopMask), result.reference.cl(loopMask));
+plot(refAlpha, refCl, "k-", "LineWidth", 1.5);
+hold on;
+if hasInitial
+    [initAlpha, initCl] = local_closed_loop(result.initial.model.alphaDeg(modelLoopMask), result.initial.model.cl(modelLoopMask));
+    plot(initAlpha, initCl, "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.3);
+end
+[optAlpha, optCl] = local_closed_loop(result.model.alphaDeg(modelLoopMask), result.model.cl(modelLoopMask));
+plot(optAlpha, optCl, "r--", "LineWidth", 1.4);
+grid on;
+xlabel("Angle of attack (deg)");
+ylabel("C_L");
+title("Lift loop, last cycle");
+local_legend(hasInitial, true);
+nexttile;
+if ~isempty(result.reference.cm)
+    plot(result.reference.time(timeMask), result.reference.cm(timeMask), "k-", "LineWidth", 1.5);
+    hold on;
+    if hasInitial
+        plot(result.fit.time(timeMask), result.initial.fit.cm(timeMask), "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.3);
+    end
+    plot(result.fit.time(timeMask), result.fit.cm(timeMask), "r--", "LineWidth", 1.4);
+    hasReference = true;
+else
+    if hasInitial
+        plot(result.initial.model.time(modelTimeMask), result.initial.model.cm(modelTimeMask), "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.3);
+        hold on;
+    end
+    plot(result.model.time(modelTimeMask), result.model.cm(modelTimeMask), "r--", "LineWidth", 1.4);
+    hasReference = false;
+end
+grid on;
+xlabel("Time (s)");
+ylabel("C_M");
+title(sprintf("Moment coefficient, last 3 cycles, area = %.5g", result.metrics.areaCm));
+local_legend(hasInitial, hasReference);
+nexttile;
+if ~isempty(result.reference.cm)
+    [refAlphaCm, refCm] = local_closed_loop(result.reference.alphaDeg(loopMask), result.reference.cm(loopMask));
+    plot(refAlphaCm, refCm, "k-", "LineWidth", 1.5);
+    hold on;
+    hasReference = true;
+else
+    hasReference = false;
+end
+if hasInitial
+    [initAlphaCm, initCm] = local_closed_loop(result.initial.model.alphaDeg(modelLoopMask), result.initial.model.cm(modelLoopMask));
+    plot(initAlphaCm, initCm, "Color", [0.35 0.35 0.35], "LineStyle", ":", "LineWidth", 1.3);
+    hold on;
+end
+[optAlphaCm, optCm] = local_closed_loop(result.model.alphaDeg(modelLoopMask), result.model.cm(modelLoopMask));
+plot(optAlphaCm, optCm, "r--", "LineWidth", 1.4);
+grid on;
+xlabel("Angle of attack (deg)");
+ylabel("C_M");
+title("Moment loop, last cycle");
+local_legend(hasInitial, hasReference);
+exportgraphics(fig, filename, "Resolution", 180);
+close(fig);
+end
+function mask = local_time_mask(result)
+if isfield(result, "display") && isfield(result.display, "historyMask")
+    mask = result.display.historyMask;
+elseif isfield(result, "display") && isfield(result.display, "lastCycleMask")
+    mask = result.display.lastCycleMask;
+else
+    mask = true(size(result.reference.time));
+end
+if nnz(mask) < 3
+    mask = true(size(result.reference.time));
+end
+end
+function mask = local_model_time_mask(result)
+if isfield(result, "display") && isfield(result.display, "modelHistoryMask")
+    mask = result.display.modelHistoryMask;
+elseif isfield(result, "display") && isfield(result.display, "modelLastCycleMask")
+    mask = result.display.modelLastCycleMask;
+else
+    mask = true(size(result.model.time));
+end
+if nnz(mask) < 3
+    mask = true(size(result.model.time));
+end
+end
+function mask = local_loop_mask(result)
+if isfield(result, "display") && isfield(result.display, "lastCycleMask")
+    mask = result.display.lastCycleMask;
+else
+    mask = true(size(result.reference.time));
+end
+if nnz(mask) < 3
+    mask = true(size(result.reference.time));
+end
+end
+function mask = local_model_loop_mask(result)
+if isfield(result, "display") && isfield(result.display, "modelLastCycleMask")
+    mask = result.display.modelLastCycleMask;
+else
+    mask = true(size(result.model.time));
+end
+if nnz(mask) < 3
+    mask = true(size(result.model.time));
+end
+end
+function [x, y] = local_closed_loop(x, y)
+x = x(:);
+y = y(:);
+if numel(x) >= 2 && (x(end) ~= x(1) || y(end) ~= y(1))
+    x(end + 1) = x(1);
+    y(end + 1) = y(1);
+end
+end
+function local_legend(hasInitial, hasReference)
+if hasReference
+    if hasInitial
+        legend("Reference", "Initial", "Optimized", "Location", "best");
+    else
+        legend("Reference", "BL model", "Location", "best");
+    end
+elseif hasInitial
+    legend("Initial", "Optimized", "Location", "best");
+else
+    legend("BL model", "Location", "best");
+end
+end
+%% ===== File: functions/cal_DS.m =====
+function [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata)
+    st   = 0.19;
+    S1 = param(1);S2 = param(2);
+    S3 = param(3);S4 = param(4);
+    A1   = param(5)        ; A2   = param(7)        ;
+    b1   = param(6)        ; b2   = param(8)        ;
+    Tp   = param(9)        ; Tf0  = param(10)        ;
+    Tvl  = param(11)        ; Tv0  = param(12)        ;
+    yita = param(13)        ;
+    A3   = param(14)           ; b3   = param(15)           ;
+    A4   = param(16)           ; b4   = param(17)           ;
+    A5   = param(18)           ; b5   = param(19)           ;
+    k0=param(20);k1=param(21);k2=param(22);k3=param(23);xcp_c = param(24);
+    CD0 =airfoildata.CD0 ;
+    CM0 = airfoildata.CM0;
+    alpha0 = airfoildata.alpha0;
+    alpha1 = airfoildata.alpha1;
+    alpha2 = airfoildata.alpha2;
+    CN1 = airfoildata.CN1;
+    CN2 = airfoildata.CN2;
+    slope = airfoildata.slope;
+    mCN = airfoildata.mCN;
+    slope_M = airfoildata.slope_M;
+    c = airfoildata.c;
+    xAC = airfoildata.xAC;
+    % CD0 = airfoildata(1);CM0 = airfoildata(2);alpha0 = airfoildata(3);alpha1 = airfoildata(4);
+    % alpha2 = airfoildata(5);CN1 = airfoildata(6);CN2 = airfoildata(7);slope = airfoildata(8);
+    % mCN = airfoildata(9);slope_M = airfoildata(10);c = airfoildata(11);xAC = airfoildata(12);
+    % xcp_c = airfoildata(13);
+    a = conditions.a;
+    da = conditions.da;
+    q = conditions.q;
+    dq = conditions.dq;
+    as = conditions.as;
+    beta = conditions.beta;
+    n_steps = conditions.n_steps;
+    ds = conditions.ds;
+    U = conditions.U;
+    M = conditions.M;
+    s = conditions.s;
+    t = conditions.t;
+    Tl = c/as;
+    Ta = 0.75*Tl/((1-M)+mCN*beta*M^2*(A1*b1+A2*b2));
+    Tq = 0.75*Tl/((1-M)+mCN*beta*M^2*(A1*b1+A2*b2));
+    km = 7/((15*(1-M)+1.5*slope_M*A5*b5*beta*M^2)) ;
+    Tam= (A3*b4+A4*b3)*2*M/(b3*b4*(1-M));
+    Tqm= 14*M/(15*(1-M)+1.5*mCN*beta^2*M^2*A5*b5);
+    %%%%%%%%%%%%%%%%%%%%初始化滞后函数与变量%%%%%%%%%%%%%%%%%%%%
+    %---------------------1.附着流----------------------
+    X1 = A1*(a(1))*exp(-0.5*b1*beta^2*ds);
+    Y1 = A2*(a(1))*exp(-0.5*b2*beta^2*ds);
+    X2 = A1*(da(1))*exp(-0.5*b1*beta^2*ds);
+    Y2 = A2*(dq(1))*exp(-0.5*b2*beta^2*ds);
+    X3 = 0;
+    X4 = 0;
+    Y4 = 0;
+    D_Na = (da(1))*exp(-0.5*ds/Ta);
+    D_Nq = (dq(1))*exp(-0.5*ds/Ta);
+    D_Mq = 0;
+    CN_cir   = zeros(n_steps,1);  % 环量法向力系数
+    CN_a_cir = zeros(n_steps,1);  % 环量项攻角贡献
+    CN_q_cir = zeros(n_steps,1);  % 环量项pitch rate贡献
+    CN_imp   = zeros(n_steps,1);  % 脉冲法向力系数
+    CN_imp_a = zeros(n_steps,1);  % 脉冲项攻角贡献
+    CN_imp_q = zeros(n_steps,1);  % 脉冲项pitch rate贡献
+    CN_pot   = zeros(n_steps,1);  % 附着流法向力系数
+    CC_pot   = zeros(n_steps,1);  % 附着流弦向力系数
+    CM_a_cir = zeros(n_steps,1);
+    CM_a_imp = zeros(n_steps,1);
+    CM_q_cir = zeros(n_steps,1);
+    CM_q_imp = zeros(n_steps,1);
+    CM_q     = zeros(n_steps,1);
+    CM_cir   = zeros(n_steps,1);
+    alpha_E  = zeros(n_steps,1);  % 3/4弦长处攻角
+    %---------------------2.分离流----------------------
+    Df = 0;
+    alpha_f= zeros(n_steps,1);
+    CN_lag = zeros(n_steps,1);  % 滞后法向力系数
+    f_orig = zeros(n_steps,1);  % 定常分离点位置
+    f      = zeros(n_steps,1);  % 非定常分离点位置
+    f_lag  = zeros(n_steps,1);  % 非定常分离点位置
+    CN_f   = zeros(n_steps,1);  % 分离流法向力系数
+    CC_f   = zeros(n_steps,1);  % 分离流弦向力系数
+    CM_f   = zeros(n_steps,1);
+    %---------------------3.涡脱落----------------------
+    tau_v = zeros(n_steps,1);   % 前缘涡无量纲位置
+    VRTX  = zeros(n_steps,1);   % 涡脱是否发生
+    TESF  = zeros(n_steps,1);
+    LESF  = zeros(n_steps,1);
+    target= zeros(n_steps,1);
+    Cv    = zeros(n_steps,1);
+    CC_V  = zeros(n_steps,1);   % 涡致弦向力系数
+    CN_V  = zeros(n_steps,1);   % 涡致法向力系数
+    CM_V  = zeros(n_steps,1);
+    %---------------------4.总荷载----------------------
+    CN_total = zeros(n_steps,1);
+    CC_total = zeros(n_steps,1);
+    CM_total = zeros(n_steps,1);
+    %%%%%%%%%%%%%%%%%%%%时间步推进计算各成分%%%%%%%%%%%%%%%%%%%%
+    for i = 1 : n_steps
+        if i == 1
+            %------------------------1.附着流-------------------------
+            alpha_E (i) = (a(i)-X1-Y1-alpha0) ;
+            CN_a_cir(i) = mCN*alpha_E(i)      ;
+            CN_q_cir(i) = 0.5*mCN*(q(i)-X2-Y2);
+            CN_cir  (i) = CN_a_cir(i)         ;
+            CN_imp_a(i) = 4*Ta/M*(da(i)-D_Na)      ;
+            CN_imp_q(i) = Tq/M*(dq(i)-D_Nq)        ;
+            CN_imp  (i) = CN_imp_q(i) + CN_imp_a(i);
+            CC_pot  (i) = CN_cir(i)*tan(alpha_E(i)+alpha0);
+            CN_pot  (i) = CN_cir(i) + CN_imp(i);
+            CM_a_cir(i)   = (xAC-0.25)*CN_a_cir(i);
+            CM_q_cir(i)   = -slope_M/16/beta*(q(i));
+            CM_a_imp(i)   = - Tam*Tl/2/M^2*(A3*b3*da(i)+A4*b4*da(i));
+            CM_q_imp(i)   = - 7*Tqm*Tl/24/M*(dq(i));
+            CM_cir(i) = CM_a_cir(i) + CM_a_imp(i) + CM_q_cir(i) + CM_q_imp(i);
+            %------------------------2.分离流-------------------------
+            Dp = (CN_pot(1))*exp(-0.5*ds/Tp);
+            CN_lag(i) = CN_pot(i)-Dp;
+            alpha_f(i)= CN_lag(i) / mCN + alpha0;
+            f_orig(i) = Leishman_exponential_fitting(alpha0,alpha1,alpha2,a(i),S1,S2,S3,S4,n_steps);
+            f(i)      = Leishman_exponential_fitting(alpha0,alpha1,alpha2,alpha_f(i),S1,S2,S3,S4,n_steps);
+            f_lag(i)  = f(i);
+            CN_f(i)   = CN_cir(i)*((1+sqrt(f_lag(i)))/2)^2;
+            CC_f(i)   = yita*CC_pot(i)*(sqrt(f_lag(i))-0.2);
+            Df = (f(1))*exp(-0.5*ds/Tf0);
+            %------------------------3.涡脱落-------------------------
+            Cv(i) = CN_cir(i)*(1-((1+sqrt(f_lag(i)))/2)^2);
+            %Cv(i) = 0;
+            CN_V(i) = 0;
+            Tf  = Tf0;
+            xcp_v = xcp_c*(1-cos(pi*tau_v(i)/Tvl));
+            CM_V(i) = -xcp_v*CN_V(i);
+            CC_total(i) = CC_f(i);
+            CN_total(i) = CN_f(i) + CN_imp(i) + CN_V(i);
+            CM  = CM_f(i) + CM_a_imp(i) + CM_q(i);
+        else
+            %------------------------1.附着流-------------------------
+            X1 = X1*exp(-b1*beta^2*ds) + A1*(a(i)-a(i-1))*exp(-0.5*b1*beta^2*ds);
+            Y1 = Y1*exp(-b2*beta^2*ds) + A2*(a(i)-a(i-1))*exp(-0.5*b2*beta^2*ds);
+            X2 = X2*exp(-b1*beta^2*ds) + A1*(q(i)-q(i-1))*exp(-0.5*b1*beta^2*ds);
+            Y2 = Y2*exp(-b2*beta^2*ds) + A2*(q(i)-q(i-1))*exp(-0.5*b2*beta^2*ds);
+            X3 = X3*exp(-b5*beta^2*ds) + A5*(q(i)-q(i-1))*exp(-0.5*b5*beta^2*ds);
+            X4 = X4*exp(-ds/(b3*Tam))+(da(i)-da(i-1))*exp(-ds/(2*b3*Tam));
+            Y4 = Y4*exp(-ds/(b4*Tam))+(da(i)-da(i-1))*exp(-ds/(2*b4*Tam));
+            alpha_E(i) = (a(i)-X1-Y1-alpha0);
+            CN_a_cir(i) = mCN*alpha_E(i);
+            CN_q_cir(i) = 0.5*mCN*(q(i)-X2-Y2);
+            CN_cir  (i) = CN_a_cir(i);
+            D_Na = D_Na*exp(-ds/Ta) + (da(i)-da(i-1))*exp(-0.5*ds/Ta);
+            D_Nq = D_Nq*exp(-ds/Tq) + (dq(i)- dq(i-1))*exp(-0.5*ds/Tq);
+            CN_imp_a(i) = 4*Ta/M*(da(i)-D_Na);
+            CN_imp_q(i) = Tq/M *(dq(i) - D_Nq);
+            CN_imp(i) = CN_imp_q(i) + CN_imp_a(i);
+            CC_pot(i) = CN_cir(i)*tan(alpha_E(i)+alpha0);
+            CN_pot(i) = CN_cir(i) + CN_imp(i);
+            D_Mq = D_Mq*exp(-ds/Tqm)+(dq(i)-dq(i-1))*exp(-0.5*ds/Tqm);
+            CM_a_cir(i)   = (xAC-0.25)*CN_a_cir(i);
+            CM_q_cir(i)   = -slope_M/16/beta*(q(i));
+            CM_a_imp(i)   = - Tam*Tl/2/M^2*(A3*b3*da(i)+A4*b4*da(i));
+            CM_q_imp(i)   = - 7*Tqm*Tl/24/M*(dq(i));
+            CM_cir(i) = CM_a_cir(i) + CM_a_imp(i) + CM_q_cir(i) + CM_q_imp(i);
+            %------------------------2.分离流-------------------------
+            Dp        = Dp*exp(-ds/Tp) + (CN_pot(i)-CN_pot(i-1))*exp(-0.5*ds/Tp);
+            CN_lag(i) = CN_pot(i) - Dp;
+            alpha_f(i)= CN_lag(i) / mCN + alpha0;
+            f(i)      = Leishman_exponential_fitting(alpha0,alpha1,alpha2,alpha_f(i),S1,S2,S3,S4,n_steps);
+            f_orig(i) = Leishman_exponential_fitting(alpha0,alpha1,alpha2,a(i),S1,S2,S3,S4,n_steps);
+            Tsh       = 2 * (1-f_lag(i-1)) / st;
+            target(i) = Tsh + Tvl;
+            if (a(i) > alpha0 && CN_lag(i) > CN1) || (a(i) < alpha0 && CN_lag(i) < CN2)
+                LESF(i) = 1;
+            else
+                LESF(i) = -1;
+            end
+            if (LESF(i) == 1) || (tau_v(i-1) > 0)
+                tau_v(i) = tau_v(i-1) + ds;
+            else
+                tau_v(i) = 0;
+            end
+            if tau_v(i) > 2*Tvl
+                tau_v(i) = 0;
+            end
+            if tau_v(i) >= target(i) && LESF(i) == 1
+                tau_v(i) = 0;
+            end
+            if tau_v(i) > 0 && tau_v(i) < 2*Tvl
+                VRTX(i) = 1;
+            else
+                VRTX(i) = -1;
+            end
+            %[f_lag(i),Tf,Df] = cal_flag(f(i),f(i-1),Df,f_lag(i-1),LESF(i),VRTX(i),da(i),a(i),alpha0,Tf0,Tf,tau_v(i),Tvl,ds);
+            % Df = Df*exp(-ds/Tf) + (f(i)-f(i-1))*exp(-0.5*ds/Tf);
+            % f_lag(i)  = f(i) - Df;
+            Df        = Df*exp(-ds/Tf) + (f(i)-f(i-1))*exp(-0.5*ds/Tf);
+            f_lag(i)  = f(i) - Df;
+            if f_lag(i) < f_lag(i-1)
+                TESF = 1;
+            else
+                TESF = -1;
+            end
+            Tf     = select_Tf(TESF,f_lag(i),f_lag(i-1),VRTX(i),da(i),a(i),alpha0,Tf0,tau_v(i),Tvl);
+            CN_f(i)   = CN_cir(i)*((1+sqrt(f_lag(i)))/2)^2;
+            CC_f(i)   = yita*CC_pot(i)*(sqrt(f_lag(i))-0.2);
+            xcp       = k0 + k1*(1-f_lag(i)) + k2*sin(pi*f_lag(i)^k3);
+            CM_f(i) = CM0 - CN_cir(i)*(xcp-0.25);
+            %------------------------3.涡脱落-------------------------
+            Tv = select_Tv(tau_v(i),Tvl,f_lag(i),f_lag(i-1),da(i),a(i),alpha0,dq(i),Tv0);
+            Cv(i) = CN_cir(i)*(1-((1+sqrt(f_lag(i)))/2)^2);
+            if LESF(i) == 1
+                if tau_v(i) > Tvl && (alpha_f(i)-alpha0)*(alpha_f(i)-alpha_f(i-1)) > 0
+                    CN_V(i) = CN_V(i-1)*exp(-2*ds/Tv0);
+                else
+                    CN_V(i) = CN_V(i-1)*exp(-ds/Tv) + (Cv(i)-Cv(i-1))*exp(-0.5*ds/Tv);
+                end
+            else
+                CN_V(i) = CN_V(i-1)*exp(-2*ds/Tv0);
+            end
+            % if sign(CN_V(i)) ~= sign(CN_f(i))
+            %     CN_V(i) = 0;
+            % end
+            xcp_v = xcp_c*(1-cos(pi*tau_v(i)/Tvl));
+            CM_V(i) = -xcp_v*CN_V(i);
+            CC_total(i) = CC_f(i);
+            CN_total(i) = CN_f(i) + CN_imp(i) + CN_V(i);
+            CM_total(i) = CM_f(i) + CM_a_imp(i) + CM_q(i);
+        end
+    end
+    CL = CN_total.*cos(a)' + CC_total.*sin(a)';
+    CD = CN_total.*sin(a)' - CC_total.*cos(a)' + CD0;
+    CM = CM_total';
+    % plot(a,CN_cir)
+    % plot(a,CN_imp)
+    % plot(a,CN_pot)
+    % plot(a,CC_pot)
+    % plot(a,f_orig,a,f)
+    % plot(t,a,t,alpha_f)
+    % plot(a,f_lag)
+    % plot(a,CN_lag)
+    % plot(a,CN_f)
+    % plot(a,CC_f)
+    % plot(Cv)
+    % plot(VRTX)
+    % plot(CN_V)
+    % plot(a,CN_total)
+    % plot(a,CC_total)
+    % plot(a,CM_total)
+end
+%% ===== File: functions/cal_flag.m =====
+function [f_lag,Tf,Df] = cal_flag(fi,fi_1,Df,f_lagi_1,LESFi,VRTXi,dai,ai,alpha0,Tf0,Tf,tau_vi,Tvl,ds)
+    Df = Df*exp(-ds/Tf) + (fi-fi_1)*exp(-0.5*ds/Tf);
+    f_lag  = fi - Df;
+    if f_lag<f_lagi_1
+        TESF = 1;
+    else
+        TESF = -1;
+    end
+    Tf = select_Tf(TESF,f_lagi_1,LESFi,VRTXi,dai,ai,alpha0,Tf0,tau_vi,Tvl);
+end
+%% ===== File: functions/compare_optimal_result.m =====
+function compare_optimal_result(para_local,para_init,setcase)
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(para_local,conditions,airfoildata);
+    [CC_init,CN_init,CM_init,CD_init,CL_init,CM_init,a_init] = cal_DS(para_init,conditions,airfoildata);
+    % CFD数据
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    w       = conditions.w;
+    dt      = conditions.dt;
+    start = 7.5;
+    last  = 8.5;
+    idx_s = 2*pi/w*start/dt;
+    idx_l = 2*pi/w*last/dt;
+    %CFD数据---------------------------------------------------
+    % data = readmatrix("FFA_W3_211.txt");
+    % figure
+    % [a1,cl] = drawCoffeint('cl_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a1,cl, 'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('升力系数 C_L','FontSize',15);
+    % title('BL模型cl系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cl_compare','.png']);
+    % exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % [a2,cd] = drawCoffeint('cd_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a2,cd,'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a0,cl,rad2deg(a_init(idx_s:idx_l)),CL_init(idx_s:idx_l), 'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('升力系数 C_L','FontSize',15);
+    title('BL模型cl系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cl_compare','.png']);
+    exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a0,cd,rad2deg(a_init(idx_s:idx_l)),CD_init(idx_s:idx_l),'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('阻力系数 C_D','FontSize',15);
+    title('BL模型cd系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cd_compare','.png']);
+    exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CM(idx_s:idx_l), a0,cm,rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l),'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('力矩系数 C_M','FontSize',15);
+    title('BL模型cm系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cm_compare','.png']);
+    exportgraphics(gcf,'cm_compare.pdf','ContentType', 'vector')
+end
+%% ===== File: functions/compare_optimal_result_cl.m =====
+function compare_optimal_result_cl(para_local_lag, para_init_cl, para_init_cm, para_local_cl, setcase)
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    para_local = [para_local_lag, para_local_cl, para_init_cm];
+    para_init  = [para_local_lag, para_init_cl, para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(para_local,conditions,airfoildata);
+    [CC_init,CN_init,CM_init,CD_init,CL_init,CM_init,a_init] = cal_DS(para_init,conditions,airfoildata);
+    % CFD数据
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    x_area = linspace(1,length(cl),500);
+    x_CFD  = linspace(1,length(cl),length(cl));
+    cl = interp1(x_CFD,cl,x_area,'linear');
+    w       = conditions.w;
+    dt      = conditions.dt;
+    start = 7;
+    last  = 8;
+    idx_s = 2*pi/w*start/dt;
+    idx_l = 2*pi/w*last/dt;
+    figure
+    dtw(cl,CL(idx_s:idx_l))
+    figure
+    dtw(cl,CL(idx_s:idx_l))
+    figure
+    plot(CL_init(idx_s:idx_l))
+    hold on
+    plot(CL(idx_s:idx_l))
+    plot(cl)
+    legend('初始值曲线','优化后','CFD')
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    %CFD数据---------------------------------------------------
+    % data = readmatrix("FFA_W3_211.txt");
+    % figure
+    % [a1,cl] = drawCoffeint('cl_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a1,cl, 'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('升力系数 C_L','FontSize',15);
+    % title('BL模型cl系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cl_compare','.png']);
+    % exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % [a2,cd] = drawCoffeint('cd_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a2,cd,'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a0,cl,rad2deg(a_init(idx_s:idx_l)),CL_init(idx_s:idx_l), 'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('法向力系数 C_N','FontSize',15);
+    title('BL模型cl系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cl_compare','.png']);
+    exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a0,cd,rad2deg(a_init(idx_s:idx_l)),CD_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CM(idx_s:idx_l), a0,cm,rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('力矩系数 C_M','FontSize',15);
+    % title('BL模型cm系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cm_compare','.png']);
+    % exportgraphics(gcf,'cm_compare.pdf','ContentType', 'vector')
+    init_data = [rad2deg(a_init(idx_s:idx_l))',CN_init(idx_s:idx_l)];
+    exp_data  = [a0,cl];
+    GZ_data  = [rad2deg(a(idx_s:idx_l))',CN_total(idx_s:idx_l)];
+    save('data_collection_cl.mat', 'init_data', 'exp_data', 'GZ_data');
+end
+%% ===== File: functions/compare_optimal_result_cm.m =====
+function compare_optimal_result_cm(para_local_lag, para_local_cl, para_init_cm, para_local_cm, setcase)
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    para_local = [para_local_lag, para_local_cl, para_local_cm];
+    para_init  = [para_local_lag, para_local_cl, para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(para_local,conditions,airfoildata);
+    [CC_init,CN_init,CM_init,CD_init,CL_init,CM_init,a_init] = cal_DS(para_init,conditions,airfoildata);
+    % CFD数据
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    x_area = linspace(1,length(cl),500);
+    x_CFD  = linspace(1,length(cl),length(cl));
+    cl = interp1(x_CFD,cl,x_area,'linear');
+    w       = conditions.w;
+    dt      = conditions.dt;
+    start = 7;
+    last  = 8;
+    idx_s = 2*pi/w*start/dt;
+    idx_l = 2*pi/w*last/dt;
+    figure
+    dtw(cm,CM(idx_s:idx_l))
+    figure
+    dtw(cm,CM_total(idx_s:idx_l))
+    figure
+    plot(CM_init(idx_s:idx_l))
+    hold on
+    plot(CM(idx_s:idx_l))
+    plot(cm)
+    legend('初始值曲线','优化后','CFD')
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    %CFD数据---------------------------------------------------
+    % data = readmatrix("FFA_W3_211.txt");
+    % figure
+    % [a1,cl] = drawCoffeint('cl_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a1,cl, 'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('升力系数 C_L','FontSize',15);
+    % title('BL模型cl系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cl_compare','.png']);
+    % exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % [a2,cd] = drawCoffeint('cd_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a2,cd,'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CM(idx_s:idx_l),a0,cm, 'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('法向力系数 C_N','FontSize',15);
+    title('BL模型cl系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cl_compare','.png']);
+    exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a0,cd,rad2deg(a_init(idx_s:idx_l)),CD_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CM(idx_s:idx_l), a0,cm,rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('力矩系数 C_M','FontSize',15);
+    % title('BL模型cm系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cm_compare','.png']);
+    % exportgraphics(gcf,'cm_compare.pdf','ContentType', 'vector')
+    init_data = [rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l)];
+    exp_data  = [a0,cm];
+    GZ_data  = [rad2deg(a(idx_s:idx_l))',CM_total(idx_s:idx_l)];
+    save('data_collection_cm.mat', 'init_data', 'exp_data', 'GZ_data');
+end
+%% ===== File: functions/compare_optimal_result_GZ.m =====
+function compare_optimal_result_GZ(para_init_lag, para_init_cl, para_init_cm, para_local_lag, setcase)
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    para_local = [para_local_lag, para_init_cl, para_init_cm];
+    para_init  = [para_init_lag, para_init_cl, para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(para_local,conditions,airfoildata);
+    [CC_init,CN_init,CM_init,CD_init,CL_init,CM_init,a_init] = cal_DS(para_init,conditions,airfoildata);
+    % CFD数据
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    x_area = linspace(1,length(cl),500);
+    x_CFD  = linspace(1,length(cl),length(cl));
+    cl = interp1(x_CFD,cl,x_area,'linear');
+    w       = conditions.w;
+    dt      = conditions.dt;
+    start = 7;
+    last  = 8;
+    idx_s = 2*pi/w*start/dt;
+    idx_l = 2*pi/w*last/dt;
+    figure
+    dtw(cm,CM_total(idx_s:idx_l))
+    figure
+    dtw(cm,CM_init(idx_s:idx_l))
+    figure
+    plot(CM_init(idx_s:idx_l))
+    hold on
+    plot(CM_total(idx_s:idx_l))
+    plot(cm)
+    legend('初始值曲线','优化后','CFD')
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    %CFD数据---------------------------------------------------
+    % data = readmatrix("FFA_W3_211.txt");
+    % figure
+    % [a1,cl] = drawCoffeint('cl_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a1,cl, 'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('升力系数 C_L','FontSize',15);
+    % title('BL模型cl系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cl_compare','.png']);
+    % exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % [a2,cd] = drawCoffeint('cd_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a2,cd,'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CM_total(idx_s:idx_l),a0,cm,rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l), 'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('法向力系数 C_N','FontSize',15);
+    title('BL模型cl系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cl_compare','.png']);
+    exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a0,cd,rad2deg(a_init(idx_s:idx_l)),CD_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CM(idx_s:idx_l), a0,cm,rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('力矩系数 C_M','FontSize',15);
+    % title('BL模型cm系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cm_compare','.png']);
+    % exportgraphics(gcf,'cm_compare.pdf','ContentType', 'vector')
+    init_data = [rad2deg(a_init(idx_s:idx_l))',CN_init(idx_s:idx_l)];
+    exp_data  = [a0,cl];
+    GZ_data  = [rad2deg(a(idx_s:idx_l))',CN_total(idx_s:idx_l)];
+    save('data_collection_GZ.mat', 'init_data', 'exp_data', 'GZ_data');
+end
+%% ===== File: functions/compare_optimal_result_lag.m =====
+function compare_optimal_result_lag(para_init_lag, para_init_cl, para_init_cm, para_local_lag, setcase)
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    para_local = [para_local_lag, para_init_cl, para_init_cm];
+    para_init  = [para_init_lag, para_init_cl, para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(para_local,conditions,airfoildata);
+    [CC_init,CN_init,CM_init,CD_init,CL_init,CM_init,a_init] = cal_DS(para_init,conditions,airfoildata);
+    % CFD数据
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    x_area = linspace(1,length(cl),500);
+    x_CFD  = linspace(1,length(cl),length(cl));
+    cl = interp1(x_CFD,cl,x_area,'linear');
+    w       = conditions.w;
+    dt      = conditions.dt;
+    start = 7;
+    last  = 8;
+    idx_s = 2*pi/w*start/dt;
+    idx_l = 2*pi/w*last/dt;
+    figure
+    dtw(cl,CL(idx_s:idx_l))
+    figure
+    dtw(cl,CL(idx_s:idx_l))
+    figure
+    plot(CL_init(idx_s:idx_l))
+    hold on
+    plot(CL(idx_s:idx_l))
+    plot(cl)
+    legend('初始值曲线','优化后','CFD')
+    [a0, cl,cd,cm] = get_CFDdata(CFDdatapath,setcase);
+    %CFD数据---------------------------------------------------
+    % data = readmatrix("FFA_W3_211.txt");
+    % figure
+    % [a1,cl] = drawCoffeint('cl_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a1,cl, 'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('升力系数 C_L','FontSize',15);
+    % title('BL模型cl系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cl_compare','.png']);
+    % exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % [a2,cd] = drawCoffeint('cd_211_0.31_20.out',meanangle,averageangle);
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a2,cd,'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('BL模型','cfd数据','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    figure
+    plot(rad2deg(a(idx_s:idx_l)), CL(idx_s:idx_l),a0,cl,rad2deg(a_init(idx_s:idx_l)),CL_init(idx_s:idx_l), 'LineWidth',1.5);
+    xlabel('攻角 α (°)','FontSize',15);
+    ylabel('法向力系数 C_N','FontSize',15);
+    title('BL模型cl系数','FontSize',15); grid on;
+    legend('优化后','升阻力数据','原BL','Location','northwest')
+    saveas(gcf, ['cl_compare','.png']);
+    exportgraphics(gcf,'cl_compare.pdf','ContentType', 'vector')
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CD(idx_s:idx_l), a0,cd,rad2deg(a_init(idx_s:idx_l)),CD_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('阻力系数 C_D','FontSize',15);
+    % title('BL模型cd系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cd_compare','.png']);
+    % exportgraphics(gcf,'cd_compare.pdf','ContentType', 'vector')
+    %
+    % figure
+    % plot(rad2deg(a(idx_s:idx_l)), CM(idx_s:idx_l), a0,cm,rad2deg(a_init(idx_s:idx_l)),CM_init(idx_s:idx_l),'LineWidth',1.5);
+    % xlabel('攻角 α (°)','FontSize',15);
+    % ylabel('力矩系数 C_M','FontSize',15);
+    % title('BL模型cm系数','FontSize',15); grid on;
+    % legend('优化后','升阻力数据','原BL','Location','northwest')
+    % saveas(gcf, ['cm_compare','.png']);
+    % exportgraphics(gcf,'cm_compare.pdf','ContentType', 'vector')
+    init_data = [rad2deg(a_init(idx_s:idx_l))',CN_init(idx_s:idx_l)];
+    exp_data  = [a0,cl];
+    GZ_data  = [rad2deg(a(idx_s:idx_l))',CN_total(idx_s:idx_l)];
+    save('data_collection_lag.mat', 'init_data', 'exp_data', 'GZ_data');
+end
+%% ===== File: functions/dataprocess_GZ.m =====
+function Error_GZ = dataprocess_GZ(ARE_data,DTW_data,GZ_data,init_data,exp_data)
+    ARE_GZ  = area_overlap_GZ(ARE_data(:,1)' ,ARE_data(:,2),exp_data(:,1),exp_data(:,2));
+    DTW_GZ  = area_overlap_GZ(DTW_data(:,1)' ,DTW_data(:,2),exp_data(:,1),exp_data(:,2));
+    GZ_GZ   = area_overlap_GZ(GZ_data(:,1)'  ,GZ_data(:,2) ,exp_data(:,1),exp_data(:,2));
+    init_GZ = area_overlap_GZ(init_data(:,1)',init_data(:,2),exp_data(:,1),exp_data(:,2));
+    area_exp = polyshape(exp_data(:,1),exp_data(:,2));
+    S_exp = area(area_exp);
+    Error_GZ = [ARE_GZ/S_exp DTW_GZ/S_exp GZ_GZ/S_exp];
+end
+%% ===== File: functions/draw_group.m =====
+function draw_group(ax, xrange, yline, txt, ytxt)
+    plot(ax, xrange, [yline yline], 'k', 'LineWidth', 1.2, 'Clipping', 'off');
+    text(ax, mean(xrange), ytxt, txt, ...
+        'HorizontalAlignment', 'center', ...
+        'VerticalAlignment', 'top', ...
+        'FontSize', 30, 'Clipping', 'off', ...
+        'Interpreter', 'latex', ...
+        'FontName', 'Times New Roman');
+end
+%% ===== File: functions/drawCoffeint.m =====
+function [a, Coefficient] = drawCoffeint(filename,setcase)
+    warning off
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions;
+    %1.工况设置（与主程序一致）
+    f     = conditions.ff ;
+    w    = conditions.w;
+    U    = conditions.U;
+    c    = 1;
+    T     = 1/f      ;
+    data       = readoutfile(filename);
+    coefficient   = data(:,2)            ;
+    time       = data(:,3)            ;
+    timestep   = time(3)- time(2);
+    %n = time(end,:) / T;
+    a = 3;
+    b = 4;
+    t_i = a * T / timestep;
+    t_j = b * T / timestep;
+    [a,~,~,~] = get_a_q(meanangle,-averageangle,w,c,U,time(t_i:t_j));
+    a = rad2deg(a);
+    Coefficient = coefficient(t_i:t_j);
+    % figure
+    % plot(a(2:length(Coff1)),Coff1(2:length(Coff1)),'Color','b')
+    % hold on
+    % plot(a(length(Coff1)+1:end),Coff2(length(Coff1)+1:end),'Color','r')
+    % title(['k = ' num2str(k)   '时的' type '系数'])
+    % ylabel(type)
+    % xlabel('攻角/ \alpha')
+    % legend('攻角增大','攻角减小','Location','northwest')
+    %
+    % saveas(gcf, [filename,'.png']);
+    % exportgraphics(gcf, [filename,'.pdf'], 'ContentType', 'vector');
+end
+%% ===== File: functions/find_a0.m =====
+function alpha0 = find_a0(data)
+    cl_exp     = data(:,2);
+    alpha_exp  = data(:,1)*pi/180;
+    cl_sign = sign(cl_exp);
+    cross_zero_idx = [];
+    for i = 2:length(cl_exp)-1
+        if cl_sign(i) * cl_sign(i+1) < 0
+            cross_zero_idx = [cross_zero_idx, i];
+        elseif cl_exp(i) == 0
+            cross_zero_idx = [cross_zero_idx, i];
+        end
+    end
+    alpha_CL0 = [];
+    for idx = cross_zero_idx
+        x1 = alpha_exp(idx);   y1 = cl_exp(idx);
+        x2 = alpha_exp(idx+1); y2 = cl_exp(idx+1);
+        alpha_0 = x1 - y1 * (x2 - x1) / (y2 - y1);
+        alpha_CL0 = [alpha_CL0, alpha_0];
+    end
+    target = abs(alpha_CL0);
+    idx    = target == min(abs(alpha_CL0));
+    alpha0 = alpha_CL0(idx);
+end
+%% ===== File: functions/find_CD0.m =====
+function cd_at_CL0 = find_CD0(data)
+    cl_exp     = data(:,2);
+    alpha_exp_deg = data(:,1);
+    alpha_exp_rad = alpha_exp_deg * pi/180;
+    cd_exp     = data(:,3);
+    valid_idx = ~isnan(cl_exp) & ~isnan(alpha_exp_deg) & ~isnan(cd_exp);
+    cl_exp = cl_exp(valid_idx);
+    alpha_exp_deg = alpha_exp_deg(valid_idx);
+    alpha_exp_rad = alpha_exp_rad(valid_idx);
+    cd_exp = cd_exp(valid_idx);
+    cl_sign = sign(cl_exp);
+    cross_zero_idx = [];
+    n = length(cl_exp);
+    for i = 2:n-1
+        if cl_sign(i) * cl_sign(i+1) < 0
+            cross_zero_idx = [cross_zero_idx, i];
+        elseif cl_exp(i) == 0
+            cross_zero_idx = [cross_zero_idx, i];
+        end
+    end
+    alpha_CL0 = [];
+    for idx = cross_zero_idx
+        x1_rad = alpha_exp_rad(idx);   y1_cl = cl_exp(idx);
+        x2_rad = alpha_exp_rad(idx+1); y2_cl = cl_exp(idx+1);
+        alpha_0_rad = x1_rad - y1_cl * (x2_rad - x1_rad) / (y2_cl - y1_cl);
+        alpha_CL0 = [alpha_CL0, alpha_0_rad];
+    end
+    target = abs(alpha_CL0);
+    idx    = target == min(abs(alpha_CL0));
+    alpha0 = alpha_CL0(idx);
+    cd_at_CL0 = [];
+    if ~isempty(alpha0)
+        alpha_0_deg = alpha0 * 180/pi;
+        cd_at_CL0 = interp1(alpha_exp_deg, cd_exp, alpha_0_deg, 'linear', 'extrap');
+    end
+end
+%% ===== File: functions/fitness.m =====
+function Fitness = fitness(param,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, Cl_CFD,Cd_CFD,Cm_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7.5 * n_steps/10;
+    last  = 8.5 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(meanangle-averageangle,meanangle+averageangle,1500);
+    [S_Cl,RMSE_CL] = area_overlap(x_area,a_c,test_Cl,rad2deg(a0),Cl_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    [dist1,~,~] = dtw(Cl_CFD,test_Cl);
+    [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = dist3;
+%% ===== File: functions/fitness_ARE.m =====
+function Fitness = fitness_ARE(param,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7* n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CN_CFD),500);
+    x_CFD  = linspace(1,length(CN_CFD),length(CN_CFD));
+    x_test  = linspace(1,length(CN_CFD),length(test_Cn));
+    [~,ARE] = area_overlap_ARE(x_area,x_test,test_Cl,x_CFD,CN_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = ARE;
+%% ===== File: functions/fitness_cl.m =====
+function Fitness = fitness_cl(para_local_lag,para_init_cl,para_init_cm,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD,CD_CFD,CM_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    param = [para_local_lag para_init_cl para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7* n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CN_CFD),500);
+    x_CFD  = linspace(1,length(CN_CFD),length(CN_CFD));
+    x_test  = linspace(1,length(CN_CFD),length(test_Cl));
+    ARE = area_overlap_GZ(a_c',test_Cl,a0,CN_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    % [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = ARE;
+%% ===== File: functions/fitness_cm.m =====
+function Fitness = fitness_cm(para_local_lag,para_local_cl,para_init_cm,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD,CD_CFD,CM_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    param = [para_local_lag para_local_cl para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7* n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CN_CFD),500);
+    x_CFD  = linspace(1,length(CN_CFD),length(CN_CFD));
+    x_test  = linspace(1,length(CN_CFD),length(test_Cl));
+    ARE = area_overlap_GZ(a_c,test_Cm,a0,CM_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    % [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = ARE;
+%% ===== File: functions/fitness_constraint.m =====
+function [c, ceq] = fitness_constraint(param, initial_fitness,setcase)
+    current_fitness = fitness(param,setcase);
+    c = current_fitness - initial_fitness;
+    ceq = [];
+end
+%% ===== File: functions/fitness_constraint_cl.m =====
+function [c, ceq] = fitness_constraint_cl(para_local_lag,para_init_cl,para_init_cm, initial_fitness,setcase)
+    current_fitness = fitness_lag(para_local_lag,para_init_cl,para_init_cm,setcase);
+    c = current_fitness - initial_fitness;
+    ceq = [];
+end
+%% ===== File: functions/fitness_constraint_cm.m =====
+function [c, ceq] = fitness_constraint_cm(para_local_lag,para_local_cl,para_init_cm, initial_fitness,setcase)
+    current_fitness = fitness_lag(para_local_lag,para_local_cl,para_init_cm,setcase);
+    c = current_fitness - initial_fitness;
+    ceq = [];
+end
+%% ===== File: functions/fitness_constraint_GZ.m =====
+function [c, ceq] = fitness_constraint_GZ(para_init_lag,para_init_cl,para_init_cm, initial_fitness,setcase)
+    current_fitness = fitness_GZ(para_init_lag,para_init_cl,para_init_cm,setcase);
+    c = current_fitness - initial_fitness;
+    ceq = [];
+end
+%% ===== File: functions/fitness_constraint_lag.m =====
+function [c, ceq] = fitness_constraint_lag(para_init_lag,para_init_cl,para_init_cm, initial_fitness,setcase)
+    current_fitness = fitness_lag(para_init_lag,para_init_cl,para_init_cm,setcase);
+    c = current_fitness - initial_fitness;
+    ceq = [];
+end
+%% ===== File: functions/fitness_DTW.m =====
+function Fitness = fitness_DTW(param,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7* n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CN_CFD),500);
+    x_CFD  = linspace(1,length(CN_CFD),length(CN_CFD));
+    x_test  = linspace(1,length(CN_CFD),length(test_Cn));
+    [S_Cl,RMSE_CL] = area_overlap_DTW(x_area,x_test,test_Cl,x_CFD,CN_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = RMSE_CL;
+%% ===== File: functions/fitness_GZ.m =====
+function Fitness = fitness_GZ(para_init_lag,para_init_cl,para_init_cm,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD,CD_CFD,CM_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    param = [para_init_lag para_init_cl para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7* n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CM_CFD),500);
+    x_CFD  = linspace(1,length(CM_CFD),length(CM_CFD));
+    x_test  = linspace(1,length(CM_CFD),length(test_Cm));
+    ARE = area_overlap_GZ(a_c,test_Cm,a0,CM_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    % [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = ARE;
+%% ===== File: functions/fitness_lag.m =====
+function Fitness = fitness_lag(para_init_lag,para_init_cl,para_init_cm,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD,CD_CFD,CM_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    param = [para_init_lag para_init_cl para_init_cm];
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7 * n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CN_CFD),500);
+    x_CFD  = linspace(1,length(CN_CFD),length(CN_CFD));
+    x_test  = linspace(1,length(CN_CFD),length(test_Cl));
+    ARE = area_overlap_GZ(a_c',test_Cl,a0,CN_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    % [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = ARE;
+%% ===== File: functions/fitness_MSE.m =====
+function Fitness = fitness_MSE(param,setcase)
+    meanangle = setcase.meanangle ;
+    averageangle = setcase.averageangle ;
+    conditions = setcase.conditions ;
+    airfoildata = setcase.airfoldata  ;
+    CFDdatapath = setcase.CFDdatapath ;
+    % CFD数据
+    [a0, CN_CFD] = get_CFDdata(CFDdatapath,setcase);
+    %% ===================== 2. 计算BL模型的输出值 Cl_BL / Cm_BL =====================
+    [CC_total,CN_total,CM_total,CD,CL,CM,a] = cal_DS(param,conditions,airfoildata);
+    % 取BL模型最后5个周期
+    n_steps = conditions.n_steps;
+    begin = 7* n_steps/10;
+    last  = 8 * n_steps/10;
+    test_Cl = CL(begin:last);
+    test_Cd = CD(begin:last);
+    test_Cm = CM(begin:last);
+    test_Cn = CN_total(begin:last);
+    a_c     = rad2deg(a(begin:last));
+    %% ===================== 3. 核心评价指标1：曲线围成面积的绝对误差=====================
+    x_area = linspace(1,length(CN_CFD),500);
+    x_CFD  = linspace(1,length(CN_CFD),length(CN_CFD));
+    x_test  = linspace(1,length(CN_CFD),length(test_Cn));
+    [S_Cl,MSE] = area_overlap_MSE(x_area,x_test,test_Cl,x_CFD,CN_CFD);
+    % [S_Cd,RMSE_CD] = area_overlap(x_area,a_c,test_Cd,rad2deg(a0),Cd_CFD);
+    % [S_Cm,RMSE_CM]  = area_overlap(x_area,a_c,test_Cm,rad2deg(a0),Cm_CFD);
+    % %Area_Err_Cm = abs(S_Cm_BL - S_Cm_CFD);
+    % Total_RMSE = RMSE_CL+RMSE_CD;
+    % Total_Area_overlap = S_Cl;
+    %% ===================== 4. 核心评价指标2：逐点拟合的均方根误差(RMSE) =====================
+    % RMSE_Cl = sqrt(mean((CL - Cl_CFD)^2));
+    % RMSE_Cd = sqrt(mean((CD - Cd_CFD)^2));
+    % RMSE_Cm = sqrt(mean((CM - Cm_CFD)^2));
+    % Total_RMSE = RMSE_Cl + RMSE_Cd + RMSE_Cm ;
+    % 动态时间规整
+    % 归一化
+    % norm_cl_cfd = normalize(Cl_CFD);
+    % norm_test_cl = normalize(test_Cl);
+    % norm_cd_cfd = normalize(Cd_CFD);
+    % norm_test_cd = normalize(test_Cd);
+    % [x_test_max,y_test_max] = getMaxXY(a_c,test_Cn);
+    % [x_CFD_max,y_CFD_max] = getMaxXY(a0,CN_CFD);
+    % [x_test_min,y_test_min] = getMinXY(a_c,test_Cn);
+    % [x_CFD_min,y_CFD_min] = getMinXY(a0,CN_CFD);
+    % CN_CFD_new = interp1(x_CFD,CN_CFD,x_area,'linear');
+    % dmax = (x_test_max-x_CFD_max)^2 + (y_CFD_max-y_test_max)^2;
+    % dmin = (x_test_min-x_CFD_min)^2 + (y_CFD_min-y_test_min)^2;
+    [dist1,~,~] = dtw(test_Cn,CN_CFD);
+    % [dist2,~,~] = dtw(Cd_CFD,test_Cd);
+    % [dist3,~,~] = dtw(Cm_CFD,test_Cm);
+    %% ===================== 5. 保留所有物理约束惩罚项（BL模型硬性要求，必须保留） =====================
+    %% ===================== 6. 总适应度函数（越小越好，完美适配进化算法） =====================
+    % 权重分配：面积误差×10（主） + RMSE（次） + 惩罚项 → 优先保证面积相近，再保证点贴合，最后保证物理合理性
+    Fitness = MSE*100;
+%% ===== File: functions/get_a_q.m =====
+function [a,da,q,dq] = get_a_q(Am,A,w,c,U,t)
+    a_deg  = Am + A * sin(w * t);
+    da_deg = A * w * cos(w * t);
+    q_deg  = da_deg * c / U;
+    dq_deg = -A * w^2 * c / U * sin(w * t);
+    a  = deg2rad(a_deg);
+    da = deg2rad(da_deg);
+    q  = deg2rad(q_deg);
+    dq = deg2rad(dq_deg);
+end
+%% ===== File: functions/get_CFDdata.m =====
+function [a, Cl,Cd,Cm] = get_CFDdata(filename,setcase)
+    warning off
+    meanangle = setcase.meanangle     ;
+    averageangle = setcase.averageangle  ;
+    conditions = setcase.conditions    ;
+    airfoildata = setcase.airfoldata;
+    w     = conditions.w;
+    c     = airfoildata.c;
+    U     = conditions.U;
+    T     = 2*pi/w      ;
+    cfd_data = readmatrix(filename);
+    time   = cfd_data(:,1);
+    Cl_ori = cfd_data(:,2);
+    Cd_ori = cfd_data(:,3);
+    Cm_ori = cfd_data(:,4);
+    timestep   = time(3)- time(2);
+    a = 3;
+    b = 4;
+    t_i = a * T / timestep;
+    t_j = b * T / timestep;
+    a = meanangle - averageangle*sin(w*time(t_i:t_j));
+    Cl = Cl_ori(t_i:t_j);
+    Cd = Cd_ori(t_i:t_j);
+    Cm = Cm_ori(t_i:t_j);
+end
+%% ===== File: functions/getMaxXY.m =====
+function [x_test_max,y_test_max] = getMaxXY(x,y)
+    y_test_max = max(y);
+    idx = y == y_test_max;
+    x_test_max = x(idx);
+end
+%% ===== File: functions/getMinXY.m =====
+function [x_test_min,y_test_min] = getMinXY(x,y)
+    y_test_min = min(y);
+    idx = y == y_test_min;
+    x_test_min = x(idx);
+end
+%% ===== File: functions/input_afdata.m =====
+function airfoildata = input_afdata
+    data    = readmatrix('FFA_W3_211.txt');
+    c      = 1             ;
+    CD0    = 1.5           ;
+    CM0    = 0.01          ;
+    alpha0 = find_a0(data) ;
+    alpha1 = deg2rad(12)   ;
+    alpha2 = deg2rad(-10)  ;
+    CN1    = 1.7          ;
+    CN2    = -1            ;
+    slope  = 7 ;
+    mCN    = slope         ;
+    slope_M= mCN           ;
+    xAC  =0.25           ; xcp_c=0.2 ;
+    airfoildata.CD0 = CD0;
+    airfoildata.CM0 = CM0;
+    airfoildata.alpha0 = alpha0;
+    airfoildata.alpha1 = alpha1;
+    airfoildata.alpha2 = alpha2;
+    airfoildata.CN1 = CN1;
+    airfoildata.CN2 = CN2;
+    airfoildata.slope = slope;
+    airfoildata.mCN = mCN;
+    airfoildata.slope_M = slope_M;
+    airfoildata.c = c;
+    airfoildata.xAC = xAC;
+    airfoildata.xcp_c = xcp_c;
+end
+%% ===== File: functions/input_condition.m =====
+function conditions = input_condition(meanangle,averageangle)
+    Re   = 1e6                       ;%雷诺数
+    st   = 0.19                      ;
+    miu  = 1.8e-5                    ;%粘度
+    rho  = 1.225                     ;%密度，kg/m3
+    c    = 1                         ;%叶片弦长，m
+    as   = 340.3                     ;%自由流声速，m/s
+    U    = 10  ;%Re*miu/rho/c        ;%来流速度，m/s
+    M    = U / as                    ;%马赫数
+    beta = sqrt(1 - M^2)             ;%参数β
+    ff   = 1                         ;%pitch角变化频率
+    k    = 0.31  ;%pi*ff*c/U          ;%缩减频率
+    w       = 2*k*U/c                ;
+    n_T     = 10                     ;
+    T       = 2*pi/w*n_T               ;%pitch角变化周期
+    n_steps = 5000;
+    t       = linspace(0,T,n_steps)     ;%计算一个周期内
+    s       = 2 * U * t / c             ;%无量纲时间
+    ds      = s(2) - s(1)               ;
+    dt      = t(2) - t(1)               ;
+    Am      = meanangle                       ;%攻角平均位置，deg
+    A       = averageangle                       ;%pitch角变化幅值，deg
+    [a,da,q,dq] = get_a_q(Am,-A,w,c,U,t);
+    conditions.a = a;
+    conditions.da = da;
+    conditions.q = q;
+    conditions.dq = dq;
+    conditions.as = as;
+    conditions.beta = beta;
+    conditions.n_steps = n_steps;
+    conditions.ds = ds;
+    conditions.dt = dt;
+    conditions.U = U;
+    conditions.M = M;
+    conditions.s = s;
+    conditions.t = t;
+    conditions.w = w;
+    conditions.ff = ff;
+    conditions.k = k;
+    conditions.Re = Re;
+end
+%% ===== File: functions/Leishman_exponential_fitting.m =====
+function f = Leishman_exponential_fitting(alpha0,alpha1,alpha2,ae,S1,S2,S3,S4,n_steps)
+    for i = 1: length(n_steps)
+        if ae <= alpha1 && alpha0 <= ae
+            f = 1 - 0.3*exp(rad2deg(ae-alpha1)/S1);
+        elseif ae <= alpha0 && alpha2 <= ae
+            f = 1 - 0.3*exp(rad2deg(alpha2-ae)/S3);
+        elseif ae > alpha1
+            f = 0.04 + 0.66*exp(rad2deg(alpha1-ae)/S2);
+        elseif ae < alpha2
+            f = 0.04 + 0.66*exp(rad2deg(ae-alpha2)/S4);
+        end
+    end
+end
+%% ===== File: functions/new_areacover.m =====
+function E = new_areacover(ARE_data,DTW_data,GZ_data,init_data,exp_data)
+    pg_ARE = polyshape(ARE_data(:,1), ARE_data(:,2));
+    pg_DTW = polyshape(DTW_data(:,1), DTW_data(:,2));
+    pg_GZ = polyshape(GZ_data(:,1), GZ_data(:,2));
+    pg_init = polyshape(init_data(:,1), init_data(:,2));
+    pg_exp = polyshape(exp_data(:,1), exp_data(:,2));
+    pg_ARE = intersect(pg_exp, pg_ARE);
+    pg_DTW = intersect(pg_exp, pg_DTW);
+    pg_GZ = intersect(pg_exp, pg_GZ);
+    pg_init = intersect(pg_exp, pg_init);
+    A_ARE = area(pg_ARE);
+    A_DTW = area(pg_DTW);
+    A_GZ = area(pg_GZ);
+    A_init = area(pg_init);
+    A_exp = area(pg_exp);
+    S_ARE = A_ARE/A_exp;
+    S_DTW = A_DTW/A_exp;
+    S_GZ = A_GZ/A_exp;
+    S_init = A_init/A_exp;
+    E = [S_ARE S_DTW S_GZ S_init];
+    % figure;
+    % plot(pg1, 'FaceColor', 'red', 'FaceAlpha', 0.3);
+    % hold on;
+    % plot(pg2, 'FaceColor', 'blue', 'FaceAlpha', 0.3);
+    % plot(pg_inter, 'FaceColor', 'green', 'FaceAlpha', 0.6);
+    % ylim([0 2])
+    % axis equal;
+    % legend('DTW区域', 'exp区域', '交集区域');
+    % title(['交集面积 = ', num2str(A_inter)]);
+end
+%% ===== File: functions/process_mat_data.m =====
+function Error_S = process_mat_data(S_ARE,S_DTW,S_GZ,S_init,S_exp)
+    error_ARE = sqrt(sum((S_ARE-S_exp).^2));
+    error_DTW = sqrt(sum((S_DTW-S_exp).^2));
+    error_GZ = sqrt(sum((S_GZ-S_exp).^2));
+    error_init = sqrt(sum((S_init-S_exp).^2));
+    Error_S= [error_ARE error_DTW error_GZ error_init];
+end
+%% ===== File: functions/readoutfile.m =====
+function data = readoutfile(filename)
+    data = readmatrix(filename, 'FileType', 'text', 'Range', 'A4');
+end
+%% ===== File: functions/reshape_data.m =====
+function [up,dw] = reshape_data(data)
+    up_1 = [];
+    up_2 = [];
+    dw = [];
+    turn = 0 ;
+    for j = 1 : length(data(:,1))
+        if j < length(data(:,1))
+            if data(j+1,1) > data(j,1)
+                if turn == 0
+                    up_1 = [up_1;[data(j,1) data(j,2)]];
+                end
+                if turn == 1
+                    up_2 = [up_2;[data(j,1) data(j,2)]];
+                end
+            else
+                turn = 1;
+                dw = [dw;[data(j,1) data(j,2)]];
+            end
+        else
+            up_2 = [up_2;[data(j,1) data(j,2)]];
+        end
+    end
+    up = [up_2;up_1];
+    % figure
+    % plot(up(:,1), up(:,2))
+    % hold on
+    % plot(dw(:,1), dw(:,2))
+    % legend('up','dw')
+end
+%% ===== File: functions/reshape_expdata.m =====
+function [final_up,final_dw] = reshape_expdata(data)
+    l = 250;
+    up_1 = [];
+    up_2 = [];
+    dw = [];
+    turn = 0 ;
+    for j = 1 : length(data(:,1))
+        if j < length(data(:,1))
+            if data(j+1,1) > data(j,1)
+                if turn == 0
+                    up_1 = [up_1;[data(j,1) data(j,2)]];
+                end
+                if turn == 1
+                    up_2 = [up_2;[data(j,1) data(j,2)]];
+                end
+            else
+                turn = 1;
+                dw = [dw;[data(j,1) data(j,2)]];
+            end
+        else
+            up_2 = [up_2;[data(j,1) data(j,2)]];
+        end
+    end
+    up = [up_2;up_1];
+    v_up = linspace(min(up(:,1)),max(up(:,1)),l);
+    v_dw = linspace(max(up(:,1)),min(up(:,1)),l);
+    up_interp = interp1(up(:,1),v_up);
+    dw_interp = interp1(dw(:,1),v_dw);
+    up_data = interp1(up(:,1),up(:,2),v_up,'linear','extrap');
+    dw_data = interp1(dw(:,1),dw(:,2),v_dw,'linear','extrap');
+    final_up = [v_up' up_data'];
+    final_dw = [v_dw' dw_data'];
+    % figure
+    % plot(final_up(:,1), final_up(:,2))
+    % hold on
+    % plot(final_dw(:,1), final_dw(:,2))
+    % legend('up','dw')
+end
+%% ===== File: functions/run_optimal.m =====
+function para_local = run_optimal(para_init,Npara,lb,ub,setcase)
+    % 4. 目标函数
+    fitnessFcn = @(param) fitness(param,setcase);
+    initial_fitness = fitness(para_init,setcase);
+    nonlcon = @(param) fitness_constraint(param, initial_fitness,setcase);
+    % 5. 全局优化，遗传算法配置
+    globaloptions = optimoptions('ga',    ...
+        'PopulationSize', 128,      ...     % 种群规模
+        'MaxGenerations', 50,      ...     % 迭代次数
+        'FunctionTolerance',1e-6,   ...
+        'ConstraintTolerance',1e-6, ...
+        'PlotFcn','gaplotrange',    ...     % 收敛曲线可视化
+        'Display','iter',           ...
+        'InitialPopulationMatrix', para_init, ...
+        'UseParallel',true);
+    % 6. 运行进化算法寻优
+    fprintf('===== 动态失速BL模型参数优化开始【CFD拟合+面积相似度】 =====\n');
+    [para_global, fitness_opt] = ga(fitnessFcn, Npara, [], [], [], [], lb, ub, nonlcon, globaloptions);
+    fprintf('===== 优化完成！最优适应度值 = %.8f =====\n', fitness_opt);
+    % 7. 局部优化
+    fminconOpts = optimoptions('fmincon', ...
+        'Algorithm', 'interior-point', ...
+        'Display', 'iter', ...
+        'MaxFunctionEvaluations', 50, ...
+        'OptimalityTolerance', 1e-4, ...
+        'StepTolerance', 1e-4,...
+        'PlotFcn','optimplotfirstorderopt',...
+        'UseParallel',true);
+    % 8. 运行局部最优化
+    fprintf('===== fmincon 局部优化开始 =====\n');
+    para1 = para_global;  % 使用 GA 的最优解作为初始值
+    [para_local, f_opt] = fmincon(fitnessFcn, para1, [], [], [], [], lb, ub, nonlcon, fminconOpts);
+    fprintf('===== 局部优化完成：最优适应度值 = %.10f =====\n', f_opt);
+    % 7. 结果输出+保存
+    para_label = {'A3','b3','A4','b4','A5','b5','k0','k1','k2','k3'};
+    fprintf('\n==================== 原始参数 ↔ 优化后最优参数 对比表 ====================\n');
+    fprintf('原始适应度=%.6f | 优化适应度=%.6f\n', fitness(para_init,setcase), fitness(para_local,setcase));
+    for i = 1:Npara
+        fprintf('%5s : 原始值=%.6f | 优化值=%.6f\n', para_label{i}, para_init(i), para_local(i));
+    end
+    [A3,b3,A4,b4,A5,b5,k0,k1,k2,k3] = deal(para_local(:));
+    save('BL模型_CFD拟合_最终优化参数.mat','para_local','fitness_opt');
+    fprintf('\n优化结果已保存至：BL模型_CFD拟合_最终优化参数.mat\n');
+    toc
+end
+%% ===== File: functions/run_optimal_1lag.m =====
+function para_local_lag = run_optimal_1lag(para_init_lag,para_init_cl,para_init_cm,Npara_lag,lb_lag,ub_lag,setcase)
+    tic
+    % 4. 目标函数
+    fitnessFcn = @(para) fitness_lag(para,para_init_cl,para_init_cm,setcase);
+    initial_fitness    = fitness_lag(para_init_lag,para_init_cl,para_init_cm,setcase);
+    nonlcon = @(para)  fitness_constraint_lag(para,para_init_cl,para_init_cm, initial_fitness,setcase);
+    % 5. 全局优化，遗传算法配置
+    globaloptions = optimoptions('ga',    ...
+        'PopulationSize', 256,      ...     % 种群规模
+        'MaxGenerations', 10,      ...     % 迭代次数
+        'FunctionTolerance',1e-3,   ...
+        'ConstraintTolerance',1e-3, ...
+        'Display','iter',           ...
+        'InitialPopulationMatrix', para_init_lag, ...
+        'UseParallel',true);
+    % 6. 运行进化算法寻优
+    fprintf('===== 动态失速BL模型参数优化开始【CFD拟合+面积相似度】 =====\n');
+    [para_local_lag, fitness_opt] = ga(fitnessFcn, Npara_lag, [], [], [], [], lb_lag, ub_lag, nonlcon, globaloptions);
+    fprintf('===== 优化完成！最优适应度值 = %.8f =====\n', fitness_opt);
+    % % 7. 局部优化
+    % fminconOpts = optimoptions('fmincon', ...
+    %     'Algorithm', 'sqp', ...
+    %     'Display', 'iter', ...
+    %     'MaxFunctionEvaluations', 50, ...
+    %     'OptimalityTolerance', 1e-8, ...
+    %     'StepTolerance', 1e-10,...
+    %     'UseParallel',true);
+    %
+    % % 8. 运行局部最优化
+    % fprintf('===== fmincon 局部优化开始 =====\n');
+    % para1 = para_global;  % 使用 GA 的最优解作为初始值
+    % [para_local, f_opt] = fmincon(fitnessFcn, para1, [], [], [], [], lb, ub, nonlcon, fminconOpts);
+    % fprintf('===== 局部优化完成：最优适应度值 = %.10f =====\n', f_opt);
+    % 7. 结果输出+保存
+    para_label = {'S1','S2','S3','S4'};
+    fprintf('\n==================== 原始参数 ↔ 优化后最优参数 对比表 ====================\n');
+    fprintf('原始适应度=%.6f | 优化适应度=%.6f\n', fitness_lag(para_init_lag,para_init_cl,para_init_cm,setcase), fitness_lag(para_local_lag,para_init_cl,para_init_cm,setcase));
+    for i = 1:Npara_lag
+        fprintf('%5s : 原始值=%.6f | 优化值=%.6f\n', para_label{i}, para_init_lag(i), para_local_lag(i));
+    end
+    [S1,S2,S3,S4] = deal(para_local_lag(1:4));
+    save('Boundary_layer_fitness.mat','para_local_lag','fitness_opt');
+    fprintf('\n优化结果已保存至：Boundary_layer_fitness.mat\n');
+    toc
+end
+%% ===== File: functions/run_optimal_2cl.m =====
+function para_local_cl = run_optimal_2cl(para_local_lag,para_init_cl,para_init_cm,Npara_cl,lb_cl,ub_cl,setcase)
+    tic
+    % 4. 目标函数
+    fitnessFcn = @(param) fitness_cl(para_local_lag,param,para_init_cm,setcase);
+    initial_fitness     = fitness_cl(para_local_lag,para_init_cl,para_init_cm,setcase);
+    nonlcon = @(param) fitness_constraint_cl(para_local_lag, param, para_init_cm, initial_fitness,setcase);
+    % 5. 全局优化，遗传算法配置
+    globaloptions = optimoptions('ga',    ...
+        'PopulationSize', 256,      ...     % 种群规模
+        'MaxGenerations', 10,      ...     % 迭代次数
+        'FunctionTolerance',1e-3,   ...
+        'ConstraintTolerance',1e-3, ...
+        'Display','iter',           ...
+        'InitialPopulationMatrix', para_init_cl, ...
+        'UseParallel',true);
+    % 6. 运行进化算法寻优
+    fprintf('===== 动态失速BL模型参数优化开始【CFD拟合+面积相似度】 =====\n');
+    [para_local_cl, fitness_opt] = ga(fitnessFcn, Npara_cl, [], [], [], [], lb_cl, ub_cl, nonlcon, globaloptions);
+    fprintf('===== 优化完成！最优适应度值 = %.8f =====\n', fitness_opt);
+    % % 7. 局部优化
+    % fminconOpts = optimoptions('fmincon', ...
+    %     'Algorithm', 'sqp', ...
+    %     'Display', 'iter', ...
+    %     'MaxFunctionEvaluations', 50, ...
+    %     'OptimalityTolerance', 1e-8, ...
+    %     'StepTolerance', 1e-10,...
+    %     'UseParallel',true);
+    %
+    % % 8. 运行局部最优化
+    % fprintf('===== fmincon 局部优化开始 =====\n');
+    % para1 = para_global;  % 使用 GA 的最优解作为初始值
+    % [para_local, f_opt] = fmincon(fitnessFcn, para1, [], [], [], [], lb, ub, nonlcon, fminconOpts);
+    % fprintf('===== 局部优化完成：最优适应度值 = %.10f =====\n', f_opt);
+    % 7. 结果输出+保存
+    para_label = {'A1','b1','A2','b2','Tp','Tf0','Tvl','Tv0','yita'};
+    fprintf('\n==================== 原始参数 ↔ 优化后最优参数 对比表 ====================\n');
+    fprintf('原始适应度=%.6f | 优化适应度=%.6f\n', fitness_cl(para_local_lag,para_init_cl,para_init_cm,setcase), fitness_cl(para_local_lag, para_local_cl, para_init_cm, setcase));
+    for i = 1:Npara_cl
+        fprintf('%5s : 原始值=%.6f | 优化值=%.6f\n', para_label{i}, para_init_cl(i), para_local_cl(i));
+    end
+    [A1,b1,A2,b2,Tp,Tf0,Tvl,Tv0,yita] = deal(para_local_cl(:));
+    save('param_cl.mat','para_local_cl','fitness_opt');
+    fprintf('\n优化结果已保存至：param_cl.mat\n');
+    toc
+end
+%% ===== File: functions/run_optimal_3cm.m =====
+function para_local_cm = run_optimal_3cm(para_local_lag,para_local_cl,para_init_cm,Npara_cm,lb_cm,ub_cm,setcase)
+    tic
+    % 4. 目标函数
+    fitnessFcn = @(para) fitness_cm(para_local_lag,para_local_cl,para,setcase);
+    initial_fitness    = fitness_cm(para_local_lag,para_local_cl,para_init_cm,setcase);
+    nonlcon = @(para)  fitness_constraint_cm(para_local_lag,para_local_cl,para, initial_fitness,setcase);
+    % 5. 全局优化，遗传算法配置
+    globaloptions = optimoptions('ga',    ...
+        'PopulationSize', 256,      ...     % 种群规模
+        'MaxGenerations', 10,      ...     % 迭代次数
+        'FunctionTolerance',1e-3,   ...
+        'ConstraintTolerance',1e-3, ...
+        'Display','iter',           ...
+        'InitialPopulationMatrix', para_init_cm, ...
+        'UseParallel',true);
+    % 6. 运行进化算法寻优
+    fprintf('===== 动态失速BL模型参数优化开始【CFD拟合+面积相似度】 =====\n');
+    [para_local_cm, fitness_opt] = ga(fitnessFcn, Npara_cm, [], [], [], [], lb_cm, ub_cm, nonlcon, globaloptions);
+    fprintf('===== 优化完成！最优适应度值 = %.8f =====\n', fitness_opt);
+    % % 7. 局部优化
+    % fminconOpts = optimoptions('fmincon', ...
+    %     'Algorithm', 'sqp', ...
+    %     'Display', 'iter', ...
+    %     'MaxFunctionEvaluations', 50, ...
+    %     'OptimalityTolerance', 1e-8, ...
+    %     'StepTolerance', 1e-10,...
+    %     'UseParallel',true);
+    %
+    % % 8. 运行局部最优化
+    % fprintf('===== fmincon 局部优化开始 =====\n');
+    % para1 = para_global;  % 使用 GA 的最优解作为初始值
+    % [para_local, f_opt] = fmincon(fitnessFcn, para1, [], [], [], [], lb, ub, nonlcon, fminconOpts);
+    % fprintf('===== 局部优化完成：最优适应度值 = %.10f =====\n', f_opt);
+    % 7. 结果输出+保存
+    para_label = {'A3','b3','A4','b4','A5','b5','k0','k1','k2','k3','xcp'};
+    fprintf('\n==================== 原始参数 ↔ 优化后最优参数 对比表 ====================\n');
+    fprintf('原始适应度=%.6f | 优化适应度=%.6f\n', fitness_cm(para_local_lag,para_local_cl,para_init_cm,setcase), fitness_cm(para_local_lag,para_local_cl,para_local_cm,setcase));
+    for i = 1:Npara_cm
+        fprintf('%5s : 原始值=%.6f | 优化值=%.6f\n', para_label{i}, para_init_cm(i), para_local_cm(i));
+    end
+    [A3,b3,A4,b4,A5,b5,k0,k1,k2,k3,xcp] = deal(para_local_cm(:));
+    save('parameters_cm.mat','para_local_cm','fitness_opt');
+    fprintf('\n优化结果已保存至：parameters_cm.mat\n');
+    toc
+end
+%% ===== File: functions/select_Tf.m =====
+function Tf = select_Tf(TESF,f_lagi_1,LESFi,VRTXi,d_alphai,alphai,alpha0,Tf0,tau_vi,Tvl)
+    Tf = Tf0;
+    if TESF == 1
+        if d_alphai*(alphai-alpha0)<0
+            Tf = Tf0 / 2;
+        elseif LESFi == -1
+            Tf = Tf0;
+        elseif f_lagi_1 < 0.7
+            Tf = Tf0 / 2;
+        else
+            Tf = Tf0 / 1.75;
+        end
+    else
+        if LESFi == -1
+            Tf = Tf0 / 0.5;
+        end
+        if VRTXi == 1 && tau_vi < Tvl && tau_vi > 0
+            Tf = Tf0 / 0.25;
+        end
+        if d_alphai*(alphai-alpha0) > 0
+            Tf = Tf0 / 0.75;
+        end
+    end
+end
+%% ===== File: functions/select_Tv.m =====
+function Tv = select_Tv(tau_v,Tvl,TESF,VRTX,d_alphai,alphai,alpha0,q_doti,Tv0)
+    Tv = Tv0 / 1;
+    if tau_v <= 2*Tvl && tau_v >= Tvl
+        Tv = Tv0 / 3;
+        if TESF == -1
+            Tv = Tv0 / 4;
+            if VRTX == 1 && 0 <= tau_v && tau_v <= Tvl
+                if d_alphai*(alphai - alpha0) <0
+                    Tv = Tv0/2;
+                else
+                    Tv = Tv0;
+                end
+            end
+        end
+    elseif d_alphai*(alphai - alpha0) <0
+        Tv = Tv0/4;
+    end
+    if TESF == -1 && q_doti*(alphai - alpha0)<0
+        Tv = Tv0;
+    end
+end
+%% ===== File: functions/transfer_cof.m =====
+function [Cn , Ct] = transfer_cof(data)
+    a     = data(:,1)*pi/180;
+    cl    = data(:,2);
+    cd    = data(:,3);
+    Cn = zeros(length(a),1);
+    Ct = zeros(length(a),1);
+    for i = 1 : length(a)
+        cn = cd(i) * sin(a(i)) + cl(i) * cos(a(i));
+        ct = cl(i) * sin(a(i)) - cd(i) * cos(a(i));
+        Cn(i) = cn;
+        Ct(i) = ct;
+    end
+end
+%% ===== File: functions/Vlift.m =====
+function Vlift(start,n_steps,ds,Tv0,CN_V,Cv)
+    if start == 2
+        CN_V(start-1) = Cv(start-1)*exp(-2*ds/Tv0);
+    end
+    for i = start : n_steps
+        CN_V(i) = CN_V(i) + CN_V(i-1)*exp(-2*ds/Tv0);
+    end
+end
+%% ===== End of source code, nonblank source lines: 3237 =====
