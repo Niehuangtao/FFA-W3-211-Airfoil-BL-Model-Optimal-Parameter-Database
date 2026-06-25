@@ -1,0 +1,9 @@
+*.asv
+*.m~
+*.autosave
+*.slxc
+*.mex*
+*.log
+
+results/generated/
+.codex-checkpoints/
